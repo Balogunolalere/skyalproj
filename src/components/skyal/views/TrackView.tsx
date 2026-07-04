@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { TRACK_STATES, formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { Search, Package, Scissors, Truck, CheckCircle2, CreditCard, ClipboardList, Loader2, ArrowRight } from "lucide-react";
@@ -37,6 +37,21 @@ export default function TrackView({
   const [loading, setLoading] = useState(false);
   const [order, setOrder] = useState<OrderData | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  /* ── Prefill: when arriving from the dashboard with a stashed order
+       number, drop it into the input and auto-track immediately. ── */
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("skyal_track");
+      if (!raw) return;
+      sessionStorage.removeItem("skyal_track");
+      setQ(raw);
+      track(raw);
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const track = async (val: string) => {
     const v = val.trim();

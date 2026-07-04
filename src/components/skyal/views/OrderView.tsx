@@ -111,6 +111,29 @@ export default function OrderView({
     }
   }, []);
 
+  /* ── Reorder prefill: when arriving from the dashboard with a stashed
+       serviceType + quantity, apply them and skip straight to the
+       Details step so the customer can review and submit quickly. ── */
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("skyal_reorder");
+      if (!raw) return;
+      sessionStorage.removeItem("skyal_reorder");
+      const pre = JSON.parse(raw);
+      if (pre?.serviceType) {
+        setServiceType(pre.serviceType);
+      }
+      if (typeof pre?.quantity === "number" && pre.quantity > 0) {
+        setQty(pre.quantity);
+      }
+      // Jump straight to the Details step (index 1) — the quote will
+      // auto-recalculate once serviceType + qty are set.
+      setStep(1);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   /* ── Fetch real services from the admin API on mount ── */
   useEffect(() => {
     let cancelled = false;
