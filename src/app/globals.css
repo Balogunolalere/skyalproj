@@ -1,0 +1,317 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ─────────────────────────────────────────────────────────────
+   SKYAL — "The Cutting Bed" design system
+   A precision laser-cutting service. The page sits on a visible
+   coordinate grid (the laser bed). Brand accent: periwinkle, the
+   colour laser-CAM software uses to preview a selected tool-path.
+   ───────────────────────────────────────────────────────────── */
+
+@theme inline {
+  /* Core palette — walnut leather + periwinkle, bridged by cordovan.
+     Brown and blue is the classic atelier pairing: the brown grounds
+     the periwinkle, the periwinkle lights the brown. */
+  --color-background: var(--bone);
+  --color-foreground: var(--ink);
+  --color-bone: var(--bone);
+  --color-vellum: var(--vellum);
+  --color-ink: var(--ink);
+  --color-leather: var(--leather);
+  --color-cordovan: var(--cordovan);
+  --color-laser: var(--laser);
+  --color-laser-deep: var(--laser-deep);
+  --color-kerf: var(--kerf);
+  --color-thread: var(--thread);
+  --color-hairline: var(--hairline);
+  /* kept for backward-compat with any oxblood references */
+  --color-oxblood: var(--leather);
+
+  /* shadcn-compatible aliases, repointed to the palette */
+  --color-card: var(--vellum);
+  --color-card-foreground: var(--ink);
+  --color-popover: var(--vellum);
+  --color-popover-foreground: var(--ink);
+  --color-primary: var(--ink);
+  --color-primary-foreground: var(--bone);
+  --color-secondary: var(--kerf);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: var(--kerf);
+  --color-muted-foreground: var(--thread);
+  --color-accent: var(--laser);
+  --color-accent-foreground: #ffffff;
+  --color-destructive: var(--leather);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--hairline);
+  --color-input: var(--hairline);
+  --color-ring: var(--laser);
+
+  /* Fonts */
+  --font-sans: var(--font-instrument-sans);
+  --font-display: var(--font-fraunces);
+  --font-mono: var(--font-jetbrains-mono);
+
+  /* Precision-machined radius — tight, not zero, not the slop default */
+  --radius-sm: 1px;
+  --radius-md: 2px;
+  --radius-lg: 3px;
+  --radius-xl: 5px;
+
+  /* Chart aliases (kept for shadcn chart components) */
+  --color-chart-1: var(--laser);
+  --color-chart-2: var(--cordovan);
+  --color-chart-3: var(--thread);
+  --color-chart-4: var(--kerf);
+  --color-chart-5: var(--ink);
+
+  /* Sidebar aliases (kept for shadcn) */
+  --color-sidebar: var(--vellum);
+  --color-sidebar-foreground: var(--ink);
+  --color-sidebar-primary: var(--ink);
+  --color-sidebar-primary-foreground: var(--bone);
+  --color-sidebar-accent: var(--kerf);
+  --color-sidebar-accent-foreground: var(--ink);
+  --color-sidebar-border: var(--hairline);
+  --color-sidebar-ring: var(--laser);
+}
+
+:root {
+  /* The palette — named for the materials they come from.
+     Walnut leather (not red oxblood) harmonises with periwinkle: both
+     share a cool-ish, sophisticated register. Cordovan bridges them. */
+  --bone: #ECE4D2;        /* raw linen / pattern-paper base */
+  --vellum: #F5F0E2;      /* raised card surface, lighter than bone */
+  --ink: #1C1714;         /* warm near-black, like a burnished leather edge */
+  --leather: #3D2818;     /* dark walnut leather — dark sections, grounding */
+  --cordovan: #5C3A28;    /* warm mid brown — bridges leather ↔ periwinkle */
+  --laser: #6090E1;       /* brand periwinkle — Skyal's company colour */
+  --laser-deep: #3A5F9E;  /* deeper periwinkle for depth + dark-mode accents */
+  --laser-hover: #4A7ACC; /* deeper periwinkle for hover states */
+  --kerf: #C5B89E;        /* cut-edge tan — grid lines, strong dividers */
+  --thread: #6E6852;      /* muted sage-thread secondary text */
+  --hairline: #D8CFBA;    /* subtle borders */
+  --radius: 3px;
+
+  /* selection */
+  --background: var(--bone);
+  --foreground: var(--ink);
+  --card: var(--vellum);
+  --card-foreground: var(--ink);
+  --popover: var(--vellum);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: var(--bone);
+  --secondary: var(--kerf);
+  --secondary-foreground: var(--ink);
+  --muted: var(--kerf);
+  --muted-foreground: var(--thread);
+  --accent: var(--laser);
+  --accent-foreground: #ffffff;
+  --destructive: var(--leather);
+  --destructive-foreground: #ffffff;
+  --border: var(--hairline);
+  --input: var(--hairline);
+  --ring: var(--laser);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-bone text-ink font-sans antialiased;
+    font-feature-settings: "ss01", "cv01";
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--laser) 28%, transparent);
+    color: var(--ink);
+  }
+  /* Fraunces optical sizing for display headlines */
+  h1, h2, h3 {
+    font-optical-sizing: auto;
+  }
+  /* Focus ring — laser amber, always visible */
+  :focus-visible {
+    outline: 2px solid var(--laser);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* ── Buttons ── */
+  .btn-laser {
+    @apply inline-flex items-center justify-center gap-2 bg-ink text-bone
+           font-medium text-sm px-6 py-3.5 transition-colors duration-200
+           hover:bg-laser hover:text-white active:scale-[0.98]
+           focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-laser
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-outline {
+    @apply inline-flex items-center justify-center gap-2 border border-ink/25
+           text-ink font-medium text-sm px-6 py-3.5 transition-colors duration-200
+           hover:border-ink hover:bg-ink hover:text-bone active:scale-[0.98]
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 text-ink font-medium text-sm
+           px-4 py-2 transition-colors duration-200
+           hover:bg-ink/5 active:scale-[0.98];
+  }
+
+  /* ── Coordinate chip — mono, earned: marks a position/section on the bed ── */
+  .coord {
+    @apply inline-flex items-center gap-1.5 font-mono text-[10px] uppercase
+           tracking-[0.18em] text-thread;
+  }
+  .coord::before {
+    content: "";
+    @apply inline-block w-2 h-2 border border-thread/60;
+    transform: rotate(45deg);
+  }
+
+  /* ── Card on the cutting bed — hairline border, vellum fill ── */
+  .bed-card {
+    @apply bg-vellum border border-hairline p-5 sm:p-6 transition-colors duration-300;
+  }
+  .bed-card-hover {
+    @apply hover:border-ink/40;
+  }
+
+  /* ── Hairline rule ── */
+  .hairline {
+    @apply w-full h-px bg-hairline;
+  }
+
+  /* ── Underline link ── */
+  .ulink {
+    @apply text-ink underline decoration-laser/50 decoration-2 underline-offset-4
+           hover:decoration-laser transition-colors;
+  }
+}
+
+@layer utilities {
+  /* The cutting-bed coordinate grid — the page's organizing substrate.
+     Refined: thinner, with a major-line every 4th for a real graph-paper feel. */
+  .cutting-bed {
+    background-image:
+      linear-gradient(to right, color-mix(in oklab, var(--kerf) 38%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--kerf) 38%, transparent) 1px, transparent 1px),
+      linear-gradient(to right, color-mix(in oklab, var(--kerf) 65%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--kerf) 65%, transparent) 1px, transparent 1px);
+    background-size: 20px 20px, 20px 20px, 80px 80px, 80px 80px;
+  }
+  @media (min-width: 768px) {
+    .cutting-bed {
+      background-size: 24px 24px, 24px 24px, 96px 96px, 96px 96px;
+    }
+  }
+  /* Fine grid overlay (half-density) */
+  .cutting-bed-fine {
+    background-image:
+      linear-gradient(to right, color-mix(in oklab, var(--kerf) 22%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--kerf) 22%, transparent) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  /* Tactile paper grain — a whisper of noise over the bone surface,
+     so it reads as pattern paper, not flat #ECE4D2. Earned: laser
+     cutting starts life on a paper pattern. */
+  .grain::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.5;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.42 0 0 0 0 0.40 0 0 0 0 0.32 0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+  .grain {
+    position: relative;
+  }
+  .grain > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Leather surface — for dark sections. A near-black brown with a
+     faint cordovan vignette so it reads as oiled leather, not a flat fill. */
+  .leather-surface {
+    background-color: var(--leather);
+    background-image:
+      radial-gradient(ellipse at 30% 0%, color-mix(in oklab, var(--cordovan) 55%, transparent) 0%, transparent 55%),
+      radial-gradient(ellipse at 80% 100%, color-mix(in oklab, var(--ink) 60%, transparent) 0%, transparent 60%);
+  }
+
+  /* Tool-path glow — used only on the hero signature */
+  .text-glow {
+    text-shadow: 0 0 14px color-mix(in oklab, var(--laser) 45%, transparent);
+  }
+
+  /* Link trace — a periwinkle rule draws in from the left on hover.
+     Used on text links that deserve the affordance. */
+  .link-trace {
+    position: relative;
+    display: inline-block;
+  }
+  .link-trace::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -2px;
+    height: 1px;
+    width: 100%;
+    background: var(--laser);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .link-trace:hover::after {
+    transform: scaleX(1);
+  }
+
+  /* Registration cross marker — the (+) at bed intersections */
+  .reg-cross {
+    position: relative;
+  }
+  .reg-cross::before, .reg-cross::after {
+    content: "";
+    position: absolute;
+    background: var(--kerf);
+  }
+  .reg-cross::before { width: 10px; height: 1px; left: -5px; top: 0; }
+  .reg-cross::after  { width: 1px; height: 10px; left: 0; top: -5px; }
+
+  /* Numeric tabular figures for data */
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* Fraunces optical display — for the rare moment we want it huge + tight */
+  .display-opt {
+    font-optical-sizing: auto;
+    font-variation-settings: "opsz" 144, "SOFT" 100;
+  }
+
+  /* Laser trace dash animation (hero signature) */
+  @keyframes laser-draw {
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes laser-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  .animate-laser-pulse {
+    animation: laser-pulse 1.6s ease-in-out infinite;
+  }
+
+  /* Reduced motion: show completed trace, no travel */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-laser-pulse { animation: none; }
+    * { scroll-behavior: auto !important; }
+  }
+}
