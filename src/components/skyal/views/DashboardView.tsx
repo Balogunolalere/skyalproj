@@ -515,9 +515,8 @@ export default function DashboardView({
                 value={phone || ""}
                 readOnly
                 disabled
-                className="opacity-60 cursor-not-allowed bg-bone
                 placeholder="+234…"
-                className="w-full bg-bone border border-hairline px-4 py-2.5 text-sm text-ink focus:border-laser outline-none"
+                className="w-full bg-bone border border-hairline px-4 py-2.5 text-sm text-ink opacity-60 cursor-not-allowed outline-none"
               />
             </div>
             <div>
