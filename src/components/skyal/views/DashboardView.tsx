@@ -167,7 +167,6 @@ export default function DashboardView({
   /* ── Profile edit state ── */
   const [showProfileEdit, setShowProfileEdit] = useState(false);
   const [editName, setEditName] = useState("");
-  const [editPhone, setEditPhone] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [profileSaved, setProfileSaved] = useState(false);
 
@@ -329,7 +328,6 @@ export default function DashboardView({
   /* ── Profile: open editor with current values ── */
   const openProfileEdit = () => {
     setEditName(name === "there" ? "" : name);
-    setEditPhone(phone);
     setEditEmail("");
     try {
       const raw = localStorage.getItem("skyal_customer");
@@ -337,7 +335,7 @@ export default function DashboardView({
         const c = JSON.parse(raw);
         if (c?.email) setEditEmail(c.email);
         if (c?.name) setEditName(c.name);
-        if (c?.phone) setEditPhone(c.phone);
+        if (c?.phone) setPhone(c.phone);
       }
     } catch {
       // ignore
@@ -350,7 +348,6 @@ export default function DashboardView({
   const saveProfile = () => {
     const next = {
       name: editName.trim() || name,
-      phone: editPhone.trim() || phone,
       email: editEmail.trim(),
     };
     try {
@@ -515,8 +512,10 @@ export default function DashboardView({
                 Phone
               </label>
               <input
-                value={editPhone}
-                onChange={(e) => setEditPhone(e.target.value)}
+                value={phone || ""}
+                readOnly
+                disabled
+                className="opacity-60 cursor-not-allowed bg-bone
                 placeholder="+234…"
                 className="w-full bg-bone border border-hairline px-4 py-2.5 text-sm text-ink focus:border-laser outline-none"
               />
