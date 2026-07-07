@@ -43,6 +43,23 @@ interface QuoteResponse {
   breakdown?: QuoteBreakdown;
 }
 
+/* ── Saved address (for the delivery-step picker) ── */
+interface SavedAddress {
+  id: string;
+  label: string;
+  recipientName?: string | null;
+  phone?: string | null;
+  address: string;
+  city?: string | null;
+  state?: string | null;
+  landmark?: string | null;
+  isDefault: boolean;
+}
+
+function fullSavedAddress(a: SavedAddress): string {
+  return [a.address, a.city, a.state, a.landmark].filter(Boolean).join(", ");
+}
+
 const STEPS = [
   { n: "01", label: "Service" },
   { n: "02", label: "Details" },
@@ -95,20 +112,39 @@ export default function OrderView({
   const [orderNo, setOrderNo] = useState("");
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
+  const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
 
   /* ── Prefill from localStorage (if the customer is signed in) ── */
   useEffect(() => {
+    let custPhone = "";
     try {
       const raw = localStorage.getItem("skyal_customer");
       if (raw) {
         const c = JSON.parse(raw);
         if (c?.name) setName(c.name);
-        if (c?.phone) setPhone(c.phone);
+        if (c?.phone) {
+          setPhone(c.phone);
+          custPhone = c.phone;
+        }
         if (c?.email) setEmail(c.email);
       }
     } catch {
       // ignore
     }
+    /* ── Saved-address picker: fetch addresses when logged in ── */
+    if (!custPhone) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/saved-addresses?phone=${encodeURIComponent(custPhone)}`);
+        const data = await res.json();
+        if (res.ok) {
+          const payload = data.data || data;
+          setSavedAddresses(payload?.addresses || []);
+        }
+      } catch {
+        // swallow — picker just stays empty
+      }
+    })();
   }, []);
 
   /* ── Reorder prefill: when arriving from the dashboard with a stashed
@@ -553,6 +589,30 @@ export default function OrderView({
               </div>
               {delivery !== "pickup" && (
                 <div className="mt-6">
+                  {savedAddresses.length > 0 && (
+                    <div className="mb-3">
+                      <label htmlFor="savedAddressPick" className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
+                        Use saved address
+                      </label>
+                      <select
+                        id="savedAddressPick"
+                        value=""
+                        onChange={(e) => {
+                          const found = savedAddresses.find((a) => a.id === e.target.value);
+                          if (found) setAddress(fullSavedAddress(found));
+                        }}
+                        className="mt-2 w-full bg-bone border border-hairline px-4 py-3 text-sm text-ink focus:border-laser outline-none"
+                      >
+                        <option value="">Select a saved address…</option>
+                        {savedAddresses.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.label}
+                            {a.isDefault ? " (default)" : ""} — {fullSavedAddress(a).slice(0, 60)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
                     Delivery address
                   </label>

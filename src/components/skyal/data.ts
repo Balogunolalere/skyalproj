@@ -13,12 +13,18 @@ export type ViewId =
   | "contact"
   | "privacy"
   | "terms"
+  | "calculator"
+  | "faq"
+  | "addresses"
+  | "designs"
   | "notfound";
 
 export const NAV_ITEMS: { id: ViewId; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "order", label: "Order" },
+  { id: "calculator", label: "Calculator" },
   { id: "track", label: "Track" },
+  { id: "faq", label: "FAQ" },
   { id: "dashboard", label: "Dashboard" },
   { id: "chat", label: "Support" },
   { id: "contact", label: "Contact" },

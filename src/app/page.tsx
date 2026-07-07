@@ -14,15 +14,22 @@ import LoginView from "@/components/skyal/views/LoginView";
 import ContactView from "@/components/skyal/views/ContactView";
 import PrivacyView from "@/components/skyal/views/PrivacyView";
 import TermsView from "@/components/skyal/views/TermsView";
+import CalculatorView from "@/components/skyal/views/CalculatorView";
+import FaqView from "@/components/skyal/views/FaqView";
+import AddressesView from "@/components/skyal/views/AddressesView";
+import DesignsView from "@/components/skyal/views/DesignsView";
 import NotFoundView from "@/components/skyal/views/NotFoundView";
 
 const VIEW_SET: ViewId[] = [
   "home", "order", "track", "dashboard", "chat",
-  "login", "contact", "privacy", "terms", "notfound",
+  "login", "contact", "privacy", "terms",
+  "calculator", "faq", "addresses", "designs",
+  "notfound",
 ];
 
-/* In-page anchors that belong to the home view (not view switches). */
-const HOME_ANCHORS = new Set(["services", "materials", "how-it-works", "faq", "craft", "why-skyal"]);
+/* In-page anchors that belong to the home view (not view switches).
+   "faq" was removed — it's now a dedicated view (see VIEW_SET). */
+const HOME_ANCHORS = new Set(["services", "materials", "how-it-works", "craft", "why-skyal"]);
 
 function hashToView(): ViewId {
   if (typeof window === "undefined") return "home";
@@ -77,6 +84,10 @@ export default function Home() {
         {view === "contact" && <ContactView onNavigate={navigate} />}
         {view === "privacy" && <PrivacyView onNavigate={navigate} />}
         {view === "terms" && <TermsView onNavigate={navigate} />}
+        {view === "calculator" && <CalculatorView onNavigate={navigate} />}
+        {view === "faq" && <FaqView onNavigate={navigate} />}
+        {view === "addresses" && <AddressesView onNavigate={navigate} />}
+        {view === "designs" && <DesignsView onNavigate={navigate} />}
         {view === "notfound" && <NotFoundView onNavigate={navigate} />}
       </main>
       <Footer onNavigate={navigate} />
