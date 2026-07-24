@@ -14,6 +14,9 @@ import LoginView from "@/components/skyal/views/LoginView";
 import ContactView from "@/components/skyal/views/ContactView";
 import PrivacyView from "@/components/skyal/views/PrivacyView";
 import TermsView from "@/components/skyal/views/TermsView";
+import DeliveryView from "@/components/skyal/views/DeliveryView";
+import RefundPolicyView from "@/components/skyal/views/RefundPolicyView";
+import CancellationPolicyView from "@/components/skyal/views/CancellationPolicyView";
 import CalculatorView from "@/components/skyal/views/CalculatorView";
 import FaqView from "@/components/skyal/views/FaqView";
 import AddressesView from "@/components/skyal/views/AddressesView";
@@ -23,6 +26,7 @@ import NotFoundView from "@/components/skyal/views/NotFoundView";
 const VIEW_SET: ViewId[] = [
   "home", "order", "track", "dashboard", "chat",
   "login", "contact", "privacy", "terms",
+  "delivery", "refund", "cancellation",
   "calculator", "faq", "addresses", "designs",
   "notfound",
 ];
@@ -84,6 +88,9 @@ export default function Home() {
         {view === "contact" && <ContactView onNavigate={navigate} />}
         {view === "privacy" && <PrivacyView onNavigate={navigate} />}
         {view === "terms" && <TermsView onNavigate={navigate} />}
+        {view === "delivery" && <DeliveryView onNavigate={navigate} />}
+        {view === "refund" && <RefundPolicyView onNavigate={navigate} />}
+        {view === "cancellation" && <CancellationPolicyView onNavigate={navigate} />}
         {view === "calculator" && <CalculatorView onNavigate={navigate} />}
         {view === "faq" && <FaqView onNavigate={navigate} />}
         {view === "addresses" && <AddressesView onNavigate={navigate} />}

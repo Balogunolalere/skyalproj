@@ -13,6 +13,9 @@ export type ViewId =
   | "contact"
   | "privacy"
   | "terms"
+  | "delivery"
+  | "refund"
+  | "cancellation"
   | "calculator"
   | "faq"
   | "addresses"
@@ -184,7 +187,7 @@ export const FAQS = [
   },
   {
     q: "Do you offer delivery?",
-    a: "Yes — pickup, local delivery in Lagos, and nationwide waybill. Choose your option at checkout.",
+    a: "Yes — Lagos delivery (same-day/next-day) or free store pickup at our Ogba, Ikeja facility. Choose your option at checkout.",
   },
   {
     q: "What if I'm not satisfied?",
@@ -242,3 +245,35 @@ export const HOURS = [
 export function formatNaira(n: number): string {
   return "₦" + Math.round(n).toLocaleString("en-NG");
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Delivery Policy — Paystack requirement
+   ───────────────────────────────────────────────────────────── */
+export const DELIVERY_SECTIONS = [
+  { id: "1.0", title: "Delivery Methods", content: "Skyal currently delivers to Lagos only. We offer two delivery options:\n\n1. **Local Delivery (Lagos):** Same-day or next-day delivery depending on your location within Lagos. Orders placed before 12 PM on business days are eligible for same-day delivery. A flat fee applies based on your area within Lagos.\n\n2. **Store Pickup:** You may collect your order directly from our facility at Wempco Rd, Ogba — Ikeja, Lagos. We will notify you via email and SMS when your order is ready for pickup. Please bring a valid ID and your order confirmation." },
+  { id: "2.0", title: "Processing Times", content: "Standard turnaround time is 72 hours from payment confirmation to dispatch. Express orders (48 hours) are available at checkout for an additional fee. Complex or large-volume orders may require 1–2 weeks — you will be informed of the estimated timeline during the quoting process.\n\nProcessing times begin once payment is confirmed and do not include weekends or public holidays in Nigeria." },
+  { id: "3.0", title: "Delivery Fees", content: "Delivery fees are calculated based on your location within Lagos at checkout. There is no flat rate — the exact cost is shown to you before you pay.\n\nStore pickup is always free.\n\nAll prices are in Nigerian Naira (NGN)." },
+  { id: "4.0", title: "Order Tracking", content: "Every order receives a unique tracking number upon dispatch. You can monitor your order status in real-time through the Track page on our platform. Updates include: payment confirmed, in queue, on the cutting bed, quality checked, dispatched, and delivered.\n\nFor local deliveries, you will receive a direct call from our courier when your order is en route." },
+  { id: "5.0", title: "Lost or Damaged Shipments", content: "In the rare event that your order is lost in transit or arrives damaged, please contact us within 48 hours of the expected delivery date. We will file a claim with our courier partner and either replace your order at no cost or issue a full refund.\n\nSkyal packages all orders securely to minimise transit risk. We accept responsibility for your order until it is delivered to the address you provided or collected at our facility." },
+];
+
+/* ─────────────────────────────────────────────────────────────
+   Refund Policy — Paystack requirement
+   ───────────────────────────────────────────────────────────── */
+export const REFUND_SECTIONS = [
+  { id: "1.0", title: "Eligibility for Refunds", content: "You are eligible for a refund under the following circumstances:\n\n1. **Order Cancelled Before Production:** If you cancel your order before it has begun cutting (before the IN_PRODUCTION status), you will receive a full refund minus a 5% processing fee.\n\n2. **Defective or Incorrect Order:** If the pieces delivered do not match your specifications, material choice, or quantity — or if they fail our quality inspection — you are entitled to a full refund or a free recut, at your discretion.\n\n3. **Non-Delivery:** If your order does not arrive within the estimated delivery window plus 7 business days, and we are unable to provide a valid tracking update, you may request a full refund.\n\n4. **Payment Errors:** In cases where you were charged twice for the same order or charged an incorrect amount, refunds will be processed immediately upon verification." },
+  { id: "2.0", title: "How to Request a Refund", content: "To request a refund, contact us at skyalservices@gmail.com or through the Support chat on our platform. Include your order number, a description of the issue, and any supporting photos or documentation.\n\nWe will acknowledge your refund request within 24 hours and process eligible refunds within 3–5 business days. Refunds are issued to the original payment method used during checkout." },
+  { id: "3.0", title: "Non-Refundable Cases", content: "The following situations are not eligible for refunds:\n\n- Orders that have already entered the production phase (cutting has begun), unless the error is Skyal's fault.\n- Changes of mind after the order has been completed and shipped.\n- Delays caused by the customer providing incorrect delivery information or being unavailable for delivery/pickup.\n- Custom designs where the customer approved the final proof before production began.\n\nIf you believe your situation qualifies for an exception, please contact us and we will review on a case-by-case basis." },
+  { id: "4.0", title: "Refund Processing Time", content: "Once a refund is approved, it typically takes 3–5 business days to reflect in your account. For bank transfers, this may take up to 7 business days depending on your financial institution. For card payments, refunds follow the card network processing timelines.\n\nIf you do not receive your refund within the stated timeframe, please reach out to us with your refund reference number." },
+];
+
+/* ─────────────────────────────────────────────────────────────
+   Cancellation Policy — Paystack requirement
+   ───────────────────────────────────────────────────────────── */
+export const CANCELLATION_SECTIONS = [
+  { id: "1.0", title: "How to Cancel an Order", content: "You may cancel your order at any time before it enters production by:\n\n1. Logging into your dashboard and clicking 'Cancel Order' on the relevant job.\n2. Contacting us via email at skyalservices@gmail.com.\n3. Using the Support chat on our platform.\n\nPlease include your order number and reason for cancellation in your request. Our support team will confirm receipt of your cancellation within 1 hour during business hours." },
+  { id: "2.0", title: "Cancellation Before Production", content: "Orders cancelled before cutting begins are eligible for a full refund minus a 5% processing fee to cover administrative costs. The refund will be processed to your original payment method within 3–5 business days.\n\nExample: For an order of ₦20,000, the processing fee would be ₦1,000, and your refund would be ₦19,000." },
+  { id: "3.0", title: "Cancellation During or After Production", content: "Once your order has entered the production phase (status shows IN_PRODUCTION or READY), it cannot be cancelled through the platform. However, you may still contact our support team to discuss your situation.\n\n- If the order is in production, a partial refund may be issued at our discretion, less the cost of materials already consumed and labour invested.\n- If the order has been completed and shipped, standard return and refund policies apply instead.\n- If the order is ready but not yet dispatched, we can hold it for you at no extra charge while you decide." },
+  { id: "4.0", title: "Skyal's Right to Cancel", content: "Skyal reserves the right to cancel any order under the following conditions:\n\n- Material is unavailable or defective and cannot be sourced in a timely manner.\n- The design submitted raises safety, legal, or intellectual property concerns.\n- Payment verification fails or fraud is suspected.\n- Force majeure events (natural disasters, infrastructure failures, etc.) prevent fulfilment.\n\nIf Skyal cancels your order, you will receive a full refund with no processing fee deducted. We will notify you as soon as possible and, where feasible, suggest alternative solutions." },
+  { id: "5.0", title: "Changes to Cancellations", content: "If your circumstances change and you wish to reinstate a cancelled order, contact us immediately. Subject to queue availability and material stock, we will do our best to accommodate your request. Reinstated orders will be prioritised based on the original order date." },
+];

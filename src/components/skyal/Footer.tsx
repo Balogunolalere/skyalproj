@@ -105,6 +105,9 @@ export default function Footer({
               <li><button onClick={() => go("contact")} className="hover:text-laser transition-colors">Contact</button></li>
               <li><button onClick={() => go("terms")} className="hover:text-laser transition-colors">Terms</button></li>
               <li><button onClick={() => go("privacy")} className="hover:text-laser transition-colors">Privacy</button></li>
+              <li><button onClick={() => go("delivery")} className="hover:text-laser transition-colors">Delivery</button></li>
+              <li><button onClick={() => go("refund")} className="hover:text-laser transition-colors">Refunds</button></li>
+              <li><button onClick={() => go("cancellation")} className="hover:text-laser transition-colors">Cancellation</button></li>
             </ul>
           </div>
         </div>
@@ -131,6 +134,9 @@ export default function Footer({
           <div className="flex gap-6">
             <button onClick={() => go("privacy")} className="hover:text-bone transition-colors">Privacy</button>
             <button onClick={() => go("terms")} className="hover:text-bone transition-colors">Terms</button>
+            <button onClick={() => go("delivery")} className="hover:text-bone transition-colors">Delivery</button>
+            <button onClick={() => go("refund")} className="hover:text-bone transition-colors">Refunds</button>
+            <button onClick={() => go("cancellation")} className="hover:text-bone transition-colors">Cancellation</button>
           </div>
         </div>
       </div>
