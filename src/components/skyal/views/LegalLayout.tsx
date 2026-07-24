@@ -3,6 +3,26 @@
 import { type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 
+/* ── Parse section content: split on newlines, render **bold** as <strong>. ── */
+function SectionContent({ text }: { text: string }) {
+  const lines = text.split("\n");
+  return (
+    <>
+      {lines.map((line, i) => (
+        <span key={i}>
+          {i > 0 && <br />}
+          {line.split(/(\*\*[^*]+\*\*)/g).map((part, j) => {
+            if (part.startsWith("**") && part.endsWith("**")) {
+              return <strong key={j} className="font-semibold">{part.slice(2, -2)}</strong>;
+            }
+            return <span key={j}>{part}</span>;
+          })}
+        </span>
+      ))}
+    </>
+  );
+}
+
 export default function LegalLayout({
   eyebrow,
   title,
@@ -48,7 +68,9 @@ export default function LegalLayout({
                   <div className="h-px bg-hairline flex-1" />
                 </div>
                 <div className="bg-vellum border border-hairline p-6 lg:p-8">
-                  <p className="text-sm lg:text-base text-thread leading-relaxed">{s.content}</p>
+                  <p className="text-sm lg:text-base text-thread leading-relaxed">
+                    <SectionContent text={s.content} />
+                  </p>
                 </div>
               </section>
             ))}
