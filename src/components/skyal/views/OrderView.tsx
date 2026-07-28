@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { ArrowLeft, ArrowRight, Check, Upload, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { toast } from 'sonner';
 
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
@@ -107,6 +108,7 @@ export default function OrderView({
   const [notes, setNotes] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [orderNo, setOrderNo] = useState("");
@@ -168,6 +170,86 @@ export default function OrderView({
     } catch {
       // ignore
     }
+  }, []);
+
+  /* ── Check for pending payment after returning from Paystack ── */
+  useEffect(() => {
+    let cancelled = false;
+    
+    // Check URL query parameters first (e.g., ?reference=... from Paystack redirect)
+    const params = new URLSearchParams(window.location.search);
+    const reference = params.get('reference');
+    const orderNum = params.get('order');
+    
+    if (reference) {
+      // Verify payment directly from URL param
+      fetch(`${API_URL}/api/payment/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reference }),
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (!cancelled && data?.data?.verified) {
+          const displayOrder = orderNum || 'unknown';
+          toast('Payment Confirmed!', {
+            icon: '✅',
+            description: `Your order #${displayOrder} has been paid successfully.`,
+          });
+          // Clean up query params without re-rendering
+          const url = new URL(window.location.href);
+          url.searchParams.delete('reference');
+          url.searchParams.delete('order');
+          window.history.replaceState({}, document.title, url.toString());
+        }
+      })
+      .catch(err => {
+        console.error('Payment verification error:', err);
+      });
+    }
+    
+    // Also check sessionStorage for pending payments (from return via "Return to Merchant")
+    const paymentKey = 'skyal_pending_payment';
+    const pendingPayment = sessionStorage.getItem(paymentKey);
+    
+    if (pendingPayment) {
+      const { orderNumber: pn, reference: pref } = JSON.parse(pendingPayment);
+      
+      // Verify payment with admin API
+      fetch(`${API_URL}/api/payment/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reference: pref }),
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (!cancelled && data?.data?.verified) {
+          // Payment successful - clear pending marker and show toast
+          sessionStorage.removeItem(paymentKey);
+          toast('Payment Confirmed!', {
+            icon: '✅',
+            description: `Order #${pn} has been paid successfully.`,
+          });
+        } else if (!cancelled) {
+          // Payment failed or not verified yet - maybe try again later
+          console.log('Payment verification failed or not completed');
+        }
+      })
+      .catch(err => {
+        console.error('Payment verification error:', err);
+        if (!cancelled) {
+          sessionStorage.removeItem(paymentKey);
+          toast('Payment Error', {
+            icon: '⚠️',
+            description: 'Failed to verify payment. Please check your order.',
+          });
+        }
+      });
+    }
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /* ── Fetch real services from the admin API on mount ── */
@@ -277,6 +359,7 @@ export default function OrderView({
     setSubmitting(true);
     setSubmitError(null);
     try {
+      // Step 1: Create the order
       const payload: Record<string, unknown> = {
         brand: "SKYAL",
         serviceType,
@@ -298,17 +381,64 @@ export default function OrderView({
       });
       const data = await res.json();
       if (!res.ok) {
-        setSubmitError(data?.error?.message || "Failed to submit order. Please try again.");
+        setSubmitError(data?.error?.message || "Failed to create order. Please try again.");
         setSubmitting(false);
         return;
       }
       const order = data.data || data;
-      setOrderNo(order.orderNumber || "");
-      setSubmitting(false);
-      setDone(true);
-    } catch {
-      setSubmitError("Network error. Please try again.");
-      setSubmitting(false);
+      const orderNumber = order.orderNumber || "";
+      const amount = quote?.quoteNaira || fallbackEstimate;
+
+      // Validate amount
+      if (!amount || amount <= 0) {
+        throw new Error('Invalid order amount');
+      }
+
+      // Step 2: Initialize Paystack payment
+      setPaymentProcessing(true);
+
+      try {
+        const paystackRes = await fetch(`${API_URL}/api/payment/initialize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount: amount,
+            email: email.trim() || `${orderNumber}@example.com`,
+            orderNumber: orderNumber,
+            metadata: { brand: "SKYAL" },
+          }),
+        });
+
+        if (!paystackRes.ok) {
+          const errData = await paystackRes.json().catch(() => ({}));
+          throw new Error(errData?.error?.message || 'Failed to initialize payment');
+        }
+
+        const paystackData = await paystackRes.json();
+        const authUrl = paystackData.data?.authorization_url || paystackData.data?.authorizationUrl;
+        const reference = paystackData.data?.reference || paystackData.data?.ref;
+
+        if (!authUrl) {
+          throw new Error('Paystack authorization URL missing');
+        }
+
+        // Store pending payment info for verification after return
+        sessionStorage.setItem('skyal_pending_payment', JSON.stringify({ orderNumber, reference }));
+
+        // Step 3: Redirect to Paystack checkout
+        window.location.href = authUrl;
+      } catch (paystackError: any) {
+        setSubmitError(`Payment initialization failed: ${paystackError.message || ''}`);
+        setPaymentProcessing(false);
+        setSubmitting(false);
+        throw paystackError;
+      }
+    } catch (error) {
+      console.error(error);
+      if (!paymentProcessing && !submitting) {
+        setSubmitError('An unexpected error occurred. Please try again.');
+        setSubmitting(false);
+      }
     }
   };
 
@@ -370,8 +500,18 @@ export default function OrderView({
     );
   }
 
+  // Check for pending payment to show warning
+  const hasPendingPayment = !!sessionStorage.getItem('skyal_pending_payment');
+
   return (
     <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-10 py-12 lg:py-20">
+      {hasPendingPayment && (
+        <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4 max-w-3xl">
+          <p className="text-sm text-yellow-800">
+            ⚠️ Payment in progress: Please complete your payment on Paystack. After completion, return to this page to confirm.
+          </p>
+        </div>
+      )}
       <Coord>START AN ORDER</Coord>
       <Heading className="text-4xl sm:text-5xl lg:text-6xl mt-4 max-w-[700px]">
         Send us your design — we&apos;ll cut it
@@ -712,16 +852,20 @@ export default function OrderView({
             ) : (
               <button
                 onClick={submit}
-                disabled={submitting}
+                disabled={submitting || paymentProcessing}
                 className="inline-flex items-center gap-2 bg-laser text-white text-sm font-medium px-7 py-3.5 hover:bg-ink hover:text-bone transition-colors active:scale-[0.98] disabled:opacity-50"
               >
-                {submitting ? (
+                {paymentProcessing ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Submitting
+                    <Loader2 className="w-4 h-4 animate-spin" /> Processing payment...
+                  </>
+                ) : submitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Creating order...
                   </>
                 ) : (
                   <>
-                    Submit order <Check className="w-4 h-4" />
+                    Pay & Submit <Check className="w-4 h-4" />
                   </>
                 )}
               </button>

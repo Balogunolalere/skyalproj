@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
 
 export const runtime = "nodejs";
 
@@ -22,27 +21,57 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const messages = Array.isArray(body?.messages) ? body.messages : [];
 
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: "assistant", content: SYSTEM },
-        ...messages.map(
-          (m: { role: string; content: string }) => ({
-            role: m.role === "assistant" ? "assistant" : "user",
-            content: m.content,
-          }),
-        ),
-      ],
-      thinking: { type: "disabled" },
+    const AGNES_API_KEY = process.env.AGNES_API_KEY;
+    if (!AGNES_API_KEY) {
+      return NextResponse.json(
+        {
+          reply: "AI service is not configured. Please contact support.",
+          error: true,
+        },
+        { status: 500 },
+      );
+    }
+
+    // Prepare messages for Agnes API (OpenAI-compatible format)
+    // Agnes expects system messages with role "system", not "assistant"
+    const agnesMessages = [
+      { role: "system", content: SYSTEM },
+      ...messages.map(
+        (m: { role: string; content: string; image?: string }) => ({
+          role: m.role === "assistant" ? "assistant" : "user",
+          content: Array.isArray(m.content) ? m.content : [{ type: "text", text: m.content }],
+        }),
+      ),
+    ];
+
+    const response = await fetch("https://apihub.agnes-ai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${AGNES_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "agnes-2.0-flash",
+        messages: agnesMessages,
+        temperature: 0.7,
+        max_tokens: 1024,
+      }),
     });
 
-    const reply = completion.choices[0]?.message?.content?.trim() || "";
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || `Agnes API error: ${response.status}`);
+    }
+
+    const reply = data.choices[0]?.message?.content?.trim() || "";
     return NextResponse.json({ reply });
-  } catch {
+  } catch (error) {
+    console.error("Agnes API error:", error);
     return NextResponse.json(
       {
         reply:
-          "I couldn't reach the model just now. Try again in a moment, or call us on 0803 500 3068.",
+          "I couldn't reach the AI just now. Try again in a moment, or call us on 0803 500 3068.",
         error: true,
       },
       { status: 200 },

@@ -1,0 +1,11 @@
+[ERROR] Expected double-quoted property name in JSON at position 2844 (line 79 column 21) in /home/doombuggy_/Projects/skyalproj/package.json
+
+  77 |     "uuid": "^11.1.0",
+  78 |     "vaul": "^1.1.2",
+> 79 |     "zod": "^4.0.2",.6"
+     |                     ^
+  80 |   },
+  81 |   "devDependencies": {
+  82 |     "@tailwindcss/postcss": "^4",
+
+For help, run: pnpm help run

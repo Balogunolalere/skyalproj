@@ -49,7 +49,6 @@ export default function Home() {
 
   // Sync from hash on mount + on hashchange
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setView(hashToView());
     const onHash = () => setView(hashToView());
     window.addEventListener("hashchange", onHash);

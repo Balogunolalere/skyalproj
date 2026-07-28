@@ -38,21 +38,6 @@ export default function TrackView({
   const [order, setOrder] = useState<OrderData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  /* ── Prefill: when arriving from the dashboard with a stashed order
-       number, drop it into the input and auto-track immediately. ── */
-  useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem("skyal_track");
-      if (!raw) return;
-      sessionStorage.removeItem("skyal_track");
-      setQ(raw);
-      track(raw);
-    } catch {
-      // ignore
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const track = async (val: string) => {
     const v = val.trim();
     if (!v) return;
@@ -77,6 +62,20 @@ export default function TrackView({
       setLoading(false);
     }
   };
+
+  /* ── Prefill: when arriving from the dashboard with a stashed order
+       number, drop it into the input and auto-track immediately. ── */
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("skyal_track");
+      if (!raw) return;
+      sessionStorage.removeItem("skyal_track");
+      setQ(raw);
+      track(raw);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Map order state to timeline index
   const stateToIndex: Record<string, number> = {
