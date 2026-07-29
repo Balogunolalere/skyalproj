@@ -14,6 +14,8 @@ server.log
 .z-ai-config
 .env
 .env.local
+.env.test
+*.env.*
 Caddyfile
 .zscripts/
 upload/
@@ -27,3 +29,8 @@ start-dev.sh
 bun.lock
 package-lock.json
 .npmrc
+*.log
+coverage/
+.nyc_output/
+*.test.js
+*.spec.js
