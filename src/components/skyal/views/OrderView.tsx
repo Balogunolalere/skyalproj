@@ -387,12 +387,18 @@ export default function OrderView({
       }
       const order = data.data || data;
       const orderNumber = order.orderNumber || "";
-      const amount = quote?.quoteNaira || fallbackEstimate;
+      const amountNaira = quote?.quoteNaira || fallbackEstimate;
 
       // Validate amount
-      if (!amount || amount <= 0) {
+      if (!amountNaira || amountNaira <= 0) {
         throw new Error('Invalid order amount');
       }
+
+      // Paystack expects amount in kobo (1 NGN = 100 kobo)
+      const amountInKobo = Math.round(amountNaira * 100);
+
+      // Use a valid email format - require email or use a proper placeholder
+      const emailToUse = email.trim() ? email.trim() : `order${orderNumber}@skyal.ng`;
 
       // Step 2: Initialize Paystack payment
       setPaymentProcessing(true);
@@ -402,8 +408,8 @@ export default function OrderView({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            amount: amount,
-            email: email.trim() || `${orderNumber}@example.com`,
+            amount: amountInKobo,
+            email: emailToUse,
             orderNumber: orderNumber,
             metadata: { brand: "SKYAL" },
           }),
