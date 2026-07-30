@@ -426,7 +426,7 @@ export default function OrderView({
             email: emailToUse,
             orderNumber: orderNumber,
             metadata: { brand: "SKYAL" },
-            callbackUrl: `${appOrigin}/order`,
+            callbackUrl: `${appOrigin}/order/callback`,
           }),
         });
 
