@@ -17,6 +17,7 @@ export default function OrderCallbackPage() {
   const [reference, setReference] = useState<string | null>(null);
   const [orderNumber, setOrderNumber] = useState<string | null>(null);
   const [orderDetails, setOrderDetails] = useState<any | null>(null);
+  const [showReceipt, setShowReceipt] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -71,9 +72,10 @@ export default function OrderCallbackPage() {
           }
         }
 
-        // Success - we can now show the success page
+        // Success - show receipt instead of loading
         if (isMounted) {
           setLoading(false);
+          setShowReceipt(true);
         }
       } catch (e: any) {
         if (isMounted) {
@@ -130,6 +132,35 @@ export default function OrderCallbackPage() {
   const displayOrder = orderNumber || 'unknown';
   const total = orderDetails?.totalAmount ? formatNaira(orderDetails.totalAmount) : '₦...';
   const service = orderDetails?.serviceLabel || orderDetails?.serviceType || 'Your order';
+  const email = orderDetails?.customerEmail || '';
+  const phone = orderDetails?.customerPhone || '';
+  const createdAt = orderDetails?.createdAt || new Date().toISOString();
+
+  // Generate and download receipt
+  const downloadReceipt = () => {
+    const content = `SKYAL LASER SERVICES
+ORDER RECEIPT
+
+Order Number: ${displayOrder}
+Service: ${service}
+Total Amount: ${total}
+Customer: ${email}
+Phone: ${phone}
+Date: ${new Date(createdAt).toLocaleString()}
+Status: PAID
+
+Thank you for your order!
+`;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `receipt-${displayOrder}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-bone">
@@ -143,21 +174,37 @@ export default function OrderCallbackPage() {
               Your order <span className="font-mono font-semibold">{displayOrder}</span> has been paid and is being processed.
             </p>
             <div className="bg-bone/50 rounded p-4 mb-6 text-left">
-              <div className="text-sm text-thread mb-2">{service}</div>
-              <div className="text-sm text-thread">Total: {total}</div>
-              {orderDetails.state && (
-                <div className="text-sm text-thread mt-2">
-                  Status: <span className={`font-mono ${orderDetails.state === 'PAYMENT_SUCCESS' ? 'text-laser' : 'text-ink'}`}>
-                    {orderDetails.state}
-                  </span>
-                </div>
-              )}
+              <div className="text-sm text-thread mb-2"><strong>Service:</strong> {service}</div>
+              <div className="text-sm text-thread mb-2"><strong>Total:</strong> {total}</div>
+              <div className="text-sm text-thread mb-2"><strong>Customer:</strong> {email}</div>
+              <div className="text-sm text-thread mb-2"><strong>Phone:</strong> {phone}</div>
+              <div className="text-sm text-thread">
+                <strong>Status:</strong> <span className="font-mono text-laser">PAYMENT_SUCCESS</span>
+              </div>
             </div>
+            
+            {/* Download Receipt Button */}
+            <button
+              onClick={downloadReceipt}
+              className="px-6 py-3 border border-ink/25 text-ink rounded hover:bg-ink hover:text-bone transition-colors mb-4 flex items-center justify-center gap-2 w-full"
+            >
+              📥 Download Receipt
+            </button>
           </>
         ) : (
           <p className="text-sm text-thread mb-6">
             Your order has been paid and is being processed.
           </p>
+        )}
+        
+        {/* Download Receipt Button (for when orderDetails is not available) */}
+        {!orderDetails && (
+          <button
+            onClick={downloadReceipt}
+            className="px-6 py-3 border border-ink/25 text-ink rounded hover:bg-ink hover:text-bone transition-colors mb-4 flex items-center justify-center gap-2 w-full"
+          >
+            📥 Download Receipt
+          </button>
         )}
         
         <div className="flex gap-3 justify-center">
