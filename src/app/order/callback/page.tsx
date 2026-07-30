@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CheckCircle2, AlertCircle, Package, Truck, CheckCircle, LogIn } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Package, LogIn } from 'lucide-react';
 import { formatNaira } from '@/components/skyal/data';
 
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || 'https://skyalxpaberin-admin.vercel.app';
@@ -14,18 +14,18 @@ export default function OrderCallbackPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [reference, setReference] = useState<string | null>(null);
   const [orderNumber, setOrderNumber] = useState<string | null>(null);
   const [orderDetails, setOrderDetails] = useState<any | null>(null);
-  const [showReceipt, setShowReceipt] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
-    const searchParams = new URL(window.location.search).searchParams;
-    const reference = searchParams.get('reference');
-    const orderNum = searchParams.get('order');
 
-    if (!reference) {
+    // Read query params once on mount — no state dependencies needed
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('reference') || params.get('trxref');
+    const orderNum = params.get('order');
+
+    if (!ref) {
       if (isMounted) {
         setError('Payment reference missing. Please try again.');
         setLoading(false);
@@ -33,31 +33,29 @@ export default function OrderCallbackPage() {
       return;
     }
 
-    if (isMounted) {
-      setReference(reference);
-      setOrderNumber(orderNum || '');
-    }
+    // Store for display
+    if (orderNum && isMounted) setOrderNumber(orderNum);
 
-    // Verify payment with admin API
+    // Verify payment with admin API (use ref/orderNum from closure, not state)
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/api/payment/verify`, {
+        const verifyRes = await fetch(`${API_URL}/api/payment/verify`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reference }),
+          body: JSON.stringify({ reference: ref }),
         });
 
-        const data = await res.json();
+        const verifyData = await verifyRes.json();
 
-        if (!res.ok || !data?.data?.verified) {
+        if (!verifyRes.ok || !verifyData?.data?.verified) {
           if (isMounted) {
-            setError(`Payment verification failed. ${data?.data?.message || data?.error?.message || 'Unknown error'}`);
+            setError(`Payment verification failed. ${verifyData?.data?.message || verifyData?.error?.message || 'Unknown error'}`);
             setLoading(false);
           }
           return;
         }
 
-        // If verified, try to fetch order details
+        // If verified, try to fetch order details for the receipt
         if (orderNum) {
           try {
             const orderRes = await fetch(`${API_URL}/api/orders?id=${orderNum}`);
@@ -72,10 +70,9 @@ export default function OrderCallbackPage() {
           }
         }
 
-        // Success - show receipt instead of loading
+        // Success
         if (isMounted) {
           setLoading(false);
-          setShowReceipt(true);
         }
       } catch (e: any) {
         if (isMounted) {
@@ -88,7 +85,7 @@ export default function OrderCallbackPage() {
     return () => {
       isMounted = false;
     };
-  }, [router, API_URL, orderNumber]);
+  }, []); // Run exactly once on mount
 
   if (loading) {
     return (

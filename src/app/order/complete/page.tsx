@@ -13,17 +13,18 @@ export default function OrderCompletePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [reference, setReference] = useState<string | null>(null);
   const [orderNumber, setOrderNumber] = useState<string | null>(null);
   const [orderDetails, setOrderDetails] = useState<any | null>(null);
 
   useEffect(() => {
     let isMounted = true;
-    const searchParams = new URL(window.location.search).searchParams;
-    const reference = searchParams.get('reference');
-    const orderNum = searchParams.get('order');
 
-    if (!reference) {
+    // Read query params once on mount — no state dependencies needed
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('reference') || params.get('trxref');
+    const orderNum = params.get('order');
+
+    if (!ref) {
       if (isMounted) {
         setError('Payment reference missing. Please try again.');
         setLoading(false);
@@ -31,25 +32,23 @@ export default function OrderCompletePage() {
       return;
     }
 
-    if (isMounted) {
-      setReference(reference);
-      setOrderNumber(orderNum || '');
-    }
+    // Store for display
+    if (orderNum && isMounted) setOrderNumber(orderNum);
 
     // Verify payment with admin API
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/api/payment/verify`, {
+        const verifyRes = await fetch(`${API_URL}/api/payment/verify`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reference }),
+          body: JSON.stringify({ reference: ref }),
         });
 
-        const data = await res.json();
+        const verifyData = await verifyRes.json();
 
-        if (!res.ok || !data?.data?.verified) {
+        if (!verifyRes.ok || !verifyData?.data?.verified) {
           if (isMounted) {
-            setError(`Payment verification failed. ${data?.data?.message || data?.error?.message || 'Unknown error'}`);
+            setError(`Payment verification failed. ${verifyData?.data?.message || verifyData?.error?.message || 'Unknown error'}`);
             setLoading(false);
           }
           return;
@@ -70,7 +69,7 @@ export default function OrderCompletePage() {
           }
         }
 
-        // Success - we can now show the success page
+        // Success
         if (isMounted) {
           setLoading(false);
         }
@@ -85,7 +84,7 @@ export default function OrderCompletePage() {
     return () => {
       isMounted = false;
     };
-  }, [router, API_URL, orderNumber]);
+  }, []); // Run exactly once on mount
 
   if (loading) {
     return (
