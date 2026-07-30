@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CheckCircle2, AlertCircle, Package, Truck, CheckCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Package, Truck, CheckCircle, LogIn } from 'lucide-react';
 import { formatNaira } from '@/components/skyal/data';
 
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || 'https://skyalxpaberin-admin.vercel.app';
@@ -60,7 +60,7 @@ export default function OrderCallbackPage() {
         // If verified, try to fetch order details
         if (orderNum) {
           try {
-            const orderRes = await fetch(`${API_URL}/api/orders?orderNumber=${orderNum}`);
+            const orderRes = await fetch(`${API_URL}/api/orders?id=${orderNum}`);
             if (orderRes.ok) {
               const orderData = await orderRes.json();
               if (isMounted) {
@@ -207,7 +207,7 @@ Thank you for your order!
           </button>
         )}
         
-        <div className="flex gap-3 justify-center">
+        <div className="flex gap-3 justify-center flex-wrap">
           <button
             onClick={() => router.replace('/order')}
             className="px-6 py-3 bg-laser text-white rounded hover:bg-ink transition-colors"
@@ -219,6 +219,12 @@ Thank you for your order!
             className="px-6 py-3 border border-ink/25 text-ink rounded hover:bg-ink hover:text-bone transition-colors flex items-center gap-2"
           >
             <Package className="w-4 h-4" /> Track Order
+          </button>
+          <button
+            onClick={() => { window.location.href = '/#login'; }}
+            className="px-6 py-3 border border-laser text-laser rounded hover:bg-laser hover:text-white transition-colors flex items-center gap-2"
+          >
+            <LogIn className="w-4 h-4" /> Dashboard Login
           </button>
         </div>
       </div>

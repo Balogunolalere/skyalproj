@@ -367,9 +367,9 @@ export default function OrderView({
         sla,
         customerName: name.trim(),
         customerPhone: phone.trim(),
+        customerEmail: email.trim() || `customer@skyal.ng`,
         deliveryMethod: delivOption?.apiMethod,
       };
-      if (email.trim()) payload.customerEmail = email.trim();
       if (delivery !== "pickup") payload.deliveryAddress = address.trim();
       const noteParts = [notes, fileName ? `Design file: ${fileName}` : "", referral ? `Referral: ${referral}` : ""].filter(Boolean);
       if (noteParts.length) payload.customerNotes = noteParts.join("\n");
@@ -426,7 +426,7 @@ export default function OrderView({
             email: emailToUse,
             orderNumber: orderNumber,
             metadata: { brand: "SKYAL" },
-            callbackUrl: `${appOrigin}/order/callback`,
+            callbackUrl: `${appOrigin}/order/callback?order=${orderNumber}`,
           }),
         });
 
