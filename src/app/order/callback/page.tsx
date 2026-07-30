@@ -129,34 +129,46 @@ export default function OrderCallbackPage() {
   const displayOrder = orderNumber || 'unknown';
   const total = orderDetails?.totalAmount ? formatNaira(orderDetails.totalAmount) : '₦...';
   const service = orderDetails?.serviceLabel || orderDetails?.serviceType || 'Your order';
-  const email = orderDetails?.customerEmail || '';
-  const phone = orderDetails?.customerPhone || '';
+  const customerName = orderDetails?.customerName || '';
+  const customerEmail = orderDetails?.customerEmail || '';
+  const customerPhone = orderDetails?.customerPhone || '';
   const createdAt = orderDetails?.createdAt || new Date().toISOString();
 
-  // Generate and download receipt
-  const downloadReceipt = () => {
-    const content = `SKYAL LASER SERVICES
-ORDER RECEIPT
-
-Order Number: ${displayOrder}
-Service: ${service}
-Total Amount: ${total}
-Customer: ${email}
-Phone: ${phone}
-Date: ${new Date(createdAt).toLocaleString()}
-Status: PAID
-
-Thank you for your order!
-`;
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `receipt-${displayOrder}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  // Generate and print receipt (opens browser print dialog → save as PDF)
+  const printReceipt = () => {
+    const receiptHTML = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Receipt ${displayOrder}</title>
+<style>
+  body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 400px; margin: 40px auto; padding: 20px; color: #1a1a1a; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .brand { color: #d97706; font-weight: 600; font-size: 14px; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  td { padding: 8px 0; border-bottom: 1px solid #e5e5e5; font-size: 14px; }
+  td:last-child { text-align: right; font-weight: 500; }
+  .total { font-size: 18px; font-weight: 700; }
+  .footer { margin-top: 24px; font-size: 12px; color: #888; text-align: center; }
+  @media print { body { margin: 0; padding: 20px; } }
+</style></head><body>
+<h1>Skyal Laser Services</h1>
+<div class="brand">ORDER RECEIPT</div>
+<table>
+<tr><td>Order Number</td><td style="font-family:monospace">${displayOrder}</td></tr>
+<tr><td>Service</td><td>${service}</td></tr>
+<tr><td>Customer</td><td>${customerName || '—'}</td></tr>
+<tr><td>Phone</td><td>${customerPhone || '—'}</td></tr>
+<tr><td>Email</td><td>${customerEmail || '—'}</td></tr>
+<tr><td>Date</td><td>${new Date(createdAt).toLocaleDateString('en-NG', { year: 'numeric', month: 'long', day: 'numeric' })}</td></tr>
+<tr><td>Status</td><td style="color:#16a34a;font-weight:600">PAID</td></tr>
+<tr class="total"><td>Total</td><td>${total}</td></tr>
+</table>
+<div class="footer">Thank you for your order!<br>Skyal Laser Services · Wempco Rd, Ogba, Ikeja, Lagos</div>
+</body></html>`;
+    const w = window.open('', '_blank', 'width=500,height=700');
+    if (w) {
+      w.document.write(receiptHTML);
+      w.document.close();
+      w.onload = () => w.print();
+    }
   };
 
   return (
@@ -173,19 +185,20 @@ Thank you for your order!
             <div className="bg-bone/50 rounded p-4 mb-6 text-left">
               <div className="text-sm text-thread mb-2"><strong>Service:</strong> {service}</div>
               <div className="text-sm text-thread mb-2"><strong>Total:</strong> {total}</div>
-              <div className="text-sm text-thread mb-2"><strong>Customer:</strong> {email}</div>
-              <div className="text-sm text-thread mb-2"><strong>Phone:</strong> {phone}</div>
+              <div className="text-sm text-thread mb-2"><strong>Customer:</strong> {customerName}</div>
+              <div className="text-sm text-thread mb-2"><strong>Phone:</strong> {customerPhone}</div>
+              <div className="text-sm text-thread mb-2"><strong>Email:</strong> {customerEmail}</div>
               <div className="text-sm text-thread">
                 <strong>Status:</strong> <span className="font-mono text-laser">PAYMENT_SUCCESS</span>
               </div>
             </div>
             
-            {/* Download Receipt Button */}
+            {/* Print Receipt Button */}
             <button
-              onClick={downloadReceipt}
+              onClick={printReceipt}
               className="px-6 py-3 border border-ink/25 text-ink rounded hover:bg-ink hover:text-bone transition-colors mb-4 flex items-center justify-center gap-2 w-full"
             >
-              📥 Download Receipt
+              🖨️ Print / Save Receipt (PDF)
             </button>
           </>
         ) : (
@@ -194,13 +207,13 @@ Thank you for your order!
           </p>
         )}
         
-        {/* Download Receipt Button (for when orderDetails is not available) */}
+        {/* Print Receipt Button (for when orderDetails is not available) */}
         {!orderDetails && (
           <button
-            onClick={downloadReceipt}
+            onClick={printReceipt}
             className="px-6 py-3 border border-ink/25 text-ink rounded hover:bg-ink hover:text-bone transition-colors mb-4 flex items-center justify-center gap-2 w-full"
           >
-            📥 Download Receipt
+            🖨️ Print / Save Receipt (PDF)
           </button>
         )}
         

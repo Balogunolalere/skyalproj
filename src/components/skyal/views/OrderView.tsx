@@ -71,8 +71,8 @@ const STEPS = [
 
 const DELIVERY_OPTIONS = [
   { id: "pickup", label: "Studio pickup", detail: "Wempco Rd, Ogba — Ikeja", cost: 0, apiMethod: "PICKUP" },
-  { id: "lagos", label: "Lagos delivery", detail: "Within 24 hrs, mainland & island", cost: 3500, apiMethod: "DELIVERY" },
-  { id: "waybill", label: "Nationwide waybill", detail: "2–5 days via GIG / RedStar", cost: 8000, apiMethod: "WAYBILL" },
+  { id: "lagos", label: "Lagos delivery", detail: "Within 24 hrs, mainland & island", cost: 3500, apiMethod: "LOCAL_DELIVERY" },
+  { id: "waybill", label: "Nationwide waybill", detail: "2–5 days via GIG / RedStar", cost: 8000, apiMethod: "NATIONWIDE_WAYBILL" },
 ];
 
 const SLA_OPTIONS = [
@@ -107,11 +107,10 @@ export default function OrderView({
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
+  const [fileData, setFileData] = useState<string | null>(null); // base64 data URL
   const [submitting, setSubmitting] = useState(false);
   const [paymentProcessing, setPaymentProcessing] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
-  const [orderNo, setOrderNo] = useState("");
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
@@ -371,6 +370,7 @@ export default function OrderView({
         deliveryMethod: delivOption?.apiMethod,
       };
       if (delivery !== "pickup") payload.deliveryAddress = address.trim();
+      if (fileData) payload.designFileUrl = fileData;
       const noteParts = [notes, fileName ? `Design file: ${fileName}` : "", referral ? `Referral: ${referral}` : ""].filter(Boolean);
       if (noteParts.length) payload.customerNotes = noteParts.join("\n");
 
@@ -472,54 +472,11 @@ export default function OrderView({
     setAddress("");
     setNotes("");
     setFileName(null);
+    setFileData(null);
     setReferral("");
     setQuote(null);
     setSubmitError(null);
-    setDone(false);
-    setOrderNo("");
   };
-
-  /* ── Success state ── */
-  if (done) {
-    return (
-      <div className="max-w-[640px] mx-auto px-4 sm:px-6 lg:px-10 py-20 lg:py-28">
-        <div className="bg-vellum border border-hairline p-8 sm:p-12 text-center">
-          <div className="w-14 h-14 mx-auto rounded-full bg-laser/10 flex items-center justify-center">
-            <CheckCircle2 className="w-7 h-7 text-laser" strokeWidth={1.6} />
-          </div>
-          <Coord className="justify-center inline-flex mt-6">ORDER RECEIVED</Coord>
-          <h1 className="font-display font-semibold text-4xl text-ink mt-4">
-            Your order is on the bed
-          </h1>
-          <p className="text-thread mt-4 leading-relaxed">
-            We&apos;ve logged your order and sent a confirmation. A quote lands
-            in your inbox within 4 hours. Track it any time with the number
-            below.
-          </p>
-          <div className="mt-8 bg-bone border border-hairline p-5">
-            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread mb-1">
-              Order number
-            </div>
-            <div className="font-mono text-2xl font-bold text-ink tnum">{orderNo}</div>
-          </div>
-          <div className="mt-8 flex justify-center gap-3 flex-wrap">
-            <button
-              onClick={() => onNavigate("track")}
-              className="inline-flex items-center gap-2 bg-ink text-bone text-sm font-medium px-6 py-3.5 hover:bg-laser hover:text-white transition-colors"
-            >
-              Track this order <ArrowRight className="w-4 h-4" />
-            </button>
-            <button
-              onClick={reset}
-              className="inline-flex items-center gap-2 border border-ink/25 text-ink text-sm font-medium px-6 py-3.5 hover:border-ink hover:bg-ink hover:text-bone transition-colors"
-            >
-              Place another
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   // Check for pending payment to show warning
   const hasPendingPayment = !!sessionStorage.getItem('skyal_pending_payment');
@@ -704,7 +661,15 @@ export default function OrderView({
                     <input
                       type="file"
                       className="hidden"
-                      onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) { setFileName(null); setFileData(null); return; }
+                        setFileName(file.name);
+                        // Read file as base64 data URL so admin can view it
+                        const reader = new FileReader();
+                        reader.onload = () => setFileData(reader.result as string);
+                        reader.readAsDataURL(file);
+                      }}
                     />
                   </label>
                 </div>
