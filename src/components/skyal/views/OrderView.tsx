@@ -412,6 +412,7 @@ export default function OrderView({
             email: emailToUse,
             orderNumber: orderNumber,
             metadata: { brand: "SKYAL" },
+            callbackUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'https://skyalproj.vercel.app'}/order/complete`,
           }),
         });
 
