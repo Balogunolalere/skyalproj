@@ -358,6 +358,30 @@ export default function OrderView({
     setSubmitting(true);
     setSubmitError(null);
     try {
+      // Step 0: Upload design file to Cloudinary if present
+      let designFileUrl: string | undefined;
+      let designFilePublicId: string | undefined;
+
+      if (fileData) {
+        try {
+          const uploadRes = await fetch(`${API_URL}/api/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file: fileData, folder: 'skyal-designs' }),
+          });
+          const uploadData = await uploadRes.json();
+          if (!uploadRes.ok) {
+            throw new Error(uploadData?.error?.message || 'File upload failed');
+          }
+          designFileUrl = uploadData.data?.url;
+          designFilePublicId = uploadData.data?.publicId;
+        } catch (uploadErr: any) {
+          setSubmitError(`File upload failed: ${uploadErr.message}`);
+          setSubmitting(false);
+          return;
+        }
+      }
+
       // Step 1: Create the order
       const payload: Record<string, unknown> = {
         brand: "SKYAL",
@@ -370,7 +394,10 @@ export default function OrderView({
         deliveryMethod: delivOption?.apiMethod,
       };
       if (delivery !== "pickup") payload.deliveryAddress = address.trim();
-      if (fileData) payload.designFileUrl = fileData;
+      if (designFileUrl) {
+        payload.designFileUrl = designFileUrl;
+        payload.designFilePublicId = designFilePublicId;
+      }
       const noteParts = [notes, fileName ? `Design file: ${fileName}` : "", referral ? `Referral: ${referral}` : ""].filter(Boolean);
       if (noteParts.length) payload.customerNotes = noteParts.join("\n");
 
