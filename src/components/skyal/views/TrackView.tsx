@@ -46,7 +46,7 @@ export default function TrackView({
     setOrder(null);
     setSearched(v);
     try {
-      const res = await fetch(`${API_URL}/api/orders?id=${encodeURIComponent(v)}`);
+      const res = await fetch(`${API_URL}/api/orders?id=${encodeURIComponent(v)}&brand=SKYAL`);
       const data = await res.json();
       if (!res.ok) {
         setError(data?.error?.message || "Order not found");

@@ -358,7 +358,7 @@ export default function OrderView({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      // Step 0: Upload design file to Cloudinary if present
+      // Step 0: Upload design file to Cloudinary if present (best-effort, non-blocking)
       let designFileUrl: string | undefined;
       let designFilePublicId: string | undefined;
 
@@ -369,16 +369,18 @@ export default function OrderView({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ file: fileData, folder: 'skyal-designs' }),
           });
-          const uploadData = await uploadRes.json();
-          if (!uploadRes.ok) {
-            throw new Error(uploadData?.error?.message || 'File upload failed');
+          // Only parse JSON if response looks like JSON (not an HTML error page)
+          const contentType = uploadRes.headers.get('content-type') || '';
+          if (uploadRes.ok && contentType.includes('application/json')) {
+            const uploadData = await uploadRes.json();
+            if (uploadData.data?.url) {
+              designFileUrl = uploadData.data.url;
+              designFilePublicId = uploadData.data.publicId;
+            }
           }
-          designFileUrl = uploadData.data?.url;
-          designFilePublicId = uploadData.data?.publicId;
-        } catch (uploadErr: any) {
-          setSubmitError(`File upload failed: ${uploadErr.message}`);
-          setSubmitting(false);
-          return;
+          // If upload fails, silently continue — file name is in notes
+        } catch {
+          // File upload is optional — continue without it
         }
       }
 
@@ -398,7 +400,7 @@ export default function OrderView({
         payload.designFileUrl = designFileUrl;
         payload.designFilePublicId = designFilePublicId;
       }
-      const noteParts = [notes, fileName ? `Design file: ${fileName}` : "", referral ? `Referral: ${referral}` : ""].filter(Boolean);
+      const noteParts = [notes, fileName ? `--- Design file: ${fileName} ---` : "", referral ? `Referral: ${referral}` : ""].filter(Boolean);
       if (noteParts.length) payload.customerNotes = noteParts.join("\n");
 
       const res = await fetch(`${API_URL}/api/orders`, {

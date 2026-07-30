@@ -57,7 +57,7 @@ export default function OrderCompletePage() {
         // If verified, try to fetch order details
         if (orderNum) {
           try {
-            const orderRes = await fetch(`${API_URL}/api/orders?id=${orderNum}`);
+            const orderRes = await fetch(`${API_URL}/api/orders?id=${orderNum}&brand=SKYAL`);
             if (orderRes.ok) {
               const orderData = await orderRes.json();
               if (isMounted) {

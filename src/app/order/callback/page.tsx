@@ -58,7 +58,7 @@ export default function OrderCallbackPage() {
         // If verified, try to fetch order details for the receipt
         if (orderNum) {
           try {
-            const orderRes = await fetch(`${API_URL}/api/orders?id=${orderNum}`);
+            const orderRes = await fetch(`${API_URL}/api/orders?id=${orderNum}&brand=SKYAL`);
             if (orderRes.ok) {
               const orderData = await orderRes.json();
               if (isMounted) {
