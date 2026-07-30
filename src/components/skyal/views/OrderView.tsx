@@ -404,11 +404,14 @@ export default function OrderView({
       setPaymentProcessing(true);
 
       try {
+        // Convert back to Naira for admin backend (which expects Naira and converts to kobo)
+        const amountInNaira = amountInKobo / 100;
+        
         const paystackRes = await fetch(`${API_URL}/api/payment/initialize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            amount: amountInKobo,
+            amount: amountInNaira,  // Send in Naira, not kobo
             email: emailToUse,
             orderNumber: orderNumber,
             metadata: { brand: "SKYAL" },
