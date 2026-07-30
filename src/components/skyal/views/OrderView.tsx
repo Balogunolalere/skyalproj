@@ -407,6 +407,17 @@ export default function OrderView({
         // Convert back to Naira for admin backend (which expects Naira and converts to kobo)
         const amountInNaira = amountInKobo / 100;
         
+        // Safely compute the app origin to avoid duplicate path segments in callbackUrl
+        const appOrigin = (() => {
+          const base = process.env.NEXT_PUBLIC_APP_URL || 'https://skyalproj.vercel.app';
+          try {
+            const url = new URL(base);
+            return `${url.protocol}//${url.hostname}${url.port ? ':' + url.port : ''}`;
+          } catch {
+            return base;
+          }
+        })();
+
         const paystackRes = await fetch(`${API_URL}/api/payment/initialize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -415,7 +426,7 @@ export default function OrderView({
             email: emailToUse,
             orderNumber: orderNumber,
             metadata: { brand: "SKYAL" },
-            callbackUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'https://skyalproj.vercel.app'}/order/complete`,
+            callbackUrl: `${appOrigin}/order/complete`,
           }),
         });
 
