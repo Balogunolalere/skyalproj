@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { Logo } from "../Logo";
-import { Send, Trash2, AlertCircle, Paperclip, X, ArrowRight, Loader2 } from "lucide-react";
+import { Send, Trash2, AlertCircle, Paperclip, X, ArrowRight, Loader2, Plus } from "lucide-react";
 
 interface Msg {
   id: string;
@@ -18,25 +18,46 @@ interface Msg {
 
 const SUGGESTIONS = [
   "What services do you offer?",
-  "How much does fabric cutting cost?",
+  "How much for 3 full bubas?",
   "How long does an order take?",
+  "Quote for 200 leather tags",
   "What materials can you cut?",
+  "I need signage, how much?",
 ];
 
 const WELCOME =
   "Hi! I'm the Skyal assistant. I can help with quotes, order tracking, materials and turnaround times. What are you cutting?";
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
+const API_URL = "/api/chat";
 
 function now() {
   return new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-export default function ChatView({
-  onNavigate,
-}: {
-  onNavigate: (v: ViewId) => void;
-}) {
+/**
+ * Lightweight markdown renderer — handles **bold**, *italic*, `code`,
+ * newlines, and https:// links without external dependencies.
+ */
+function renderMarkdown(text: string): React.ReactNode[] {
+  if (!text) return [];
+  const parts: React.ReactNode[] = [];
+  const lines = text.split('\n');
+  lines.forEach((line, li) => {
+    if (li > 0) parts.push(<br key={`br-${li}`} />);
+    const tokens = line.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|https?:\/\/\S+)/g);
+    tokens.forEach((tok, ti) => {
+      if (!tok) return;
+      if (tok.startsWith('**') && tok.endsWith('**')) parts.push(<strong key={`${li}-${ti}`}>{tok.slice(2, -2)}</strong>);
+      else if (tok.startsWith('*') && tok.endsWith('*')) parts.push(<em key={`${li}-${ti}`}>{tok.slice(1, -1)}</em>);
+      else if (tok.startsWith('`') && tok.endsWith('`')) parts.push(<code key={`${li}-${ti}`} className="font-mono text-[0.9em] bg-hairline/30 px-1">{tok.slice(1, -1)}</code>);
+      else if (/^https?:\/\//.test(tok)) parts.push(<a key={`${li}-${ti}`} href={tok} target="_blank" rel="noopener noreferrer" className="text-laser underline hover:no-underline">{tok}</a>);
+      else parts.push(<span key={`${li}-${ti}`}>{tok}</span>);
+    });
+  });
+  return parts;
+}
+
+export default function ChatView({ onNavigate }: { onNavigate: (v: ViewId) => void }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -45,114 +66,38 @@ export default function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    setMsgs([{ id: "w", who: "support", text: WELCOME, time: now() }]);
-  }, []);
+  useEffect(() => { setMsgs([{ id: "w", who: "support", text: WELCOME, time: now() }]); }, []);
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [msgs, busy]);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [msgs, busy]);
+  const send = useCallback(async (text: string) => {
+    const clean = text.trim();
+    if ((!clean && !pendingImage) || busy) return;
+    const userMsg: Msg = { id: `u-${Date.now()}`, who: "customer", text: clean || "(image attached)", time: now(), image: pendingImage ?? undefined };
+    const newMsgs = [...msgs, userMsg];
+    setMsgs(newMsgs); setInput(""); const img = pendingImage; setPendingImage(null); setBusy(true);
 
-  const send = useCallback(
-    async (text: string) => {
-      const clean = text.trim();
-      if ((!clean && !pendingImage) || busy) return;
+    try {
+      const history = msgs.filter(m => !m.error && m.id !== "w").map(m => ({ role: m.who === "support" ? "assistant" : "user", content: m.text }));
+      const payload: Record<string, unknown> = { message: clean, brand: "skyal", mode: "live", history };
+      if (sessionId) payload.sessionId = sessionId;
+      if (img) payload.image_base64 = img;
 
-      const userMsg: Msg = {
-        id: `u-${Date.now()}`,
-        who: "customer",
-        text: clean || "(image attached)",
-        time: now(),
-        image: pendingImage ?? undefined,
-      };
-      const newMsgs = [...msgs, userMsg];
-      setMsgs(newMsgs);
-      setInput("");
-      const image = pendingImage;
-      setPendingImage(null);
-      setBusy(true);
+      const res = await fetch(API_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData?.error || `Chat failed (${res.status})`); }
+      const data = await res.json();
+      if (data.sessionId) setSessionId(data.sessionId);
+      const replyText = data.assistant_text || data.reply || "(no response)";
+      const quote = data.quote ? { price: data.quote.price, summary: data.quote.summary, renderOrderNow: data.render_order_now } : undefined;
 
-      try {
-        // Build history for LLM context (skip welcome and error messages)
-        const history = msgs
-          .filter((m) => !m.error && m.id !== "w")
-          .map((m) => ({
-            role: m.who === "support" ? "assistant" : "user",
-            content: m.text,
-          }));
+      setMsgs(prev => [...prev, { id: `s-${Date.now()}`, who: "support", text: replyText, time: now(), quote }]);
+    } catch (err: any) {
+      setMsgs(prev => [...prev, { id: `e-${Date.now()}`, who: "support", text: err.message || "Connection dropped. Try again.", time: now(), error: true }]);
+    } finally { setBusy(false); }
+  }, [busy, msgs, pendingImage, sessionId]);
 
-        const payload: Record<string, unknown> = {
-          message: clean,
-          brand: "skyal",
-          mode: "live",
-          history,
-        };
-        if (sessionId) payload.sessionId = sessionId;
-        if (image) payload.image_base64 = image;
+  const clear = () => { setMsgs([{ id: "w2", who: "support", text: WELCOME, time: now() }]); setInput(""); setPendingImage(null); setSessionId(undefined); };
 
-        const res = await fetch(`${API_URL}/api/skyal/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData?.error || `Chat failed (${res.status})`);
-        }
-
-        const data = await res.json();
-
-        if (data.sessionId) setSessionId(data.sessionId);
-
-        const replyText = data.assistant_text || data.reply || "(no response)";
-        const quote = data.quote
-          ? { price: data.quote.price, summary: data.quote.summary, renderOrderNow: data.render_order_now }
-          : undefined;
-
-        setMsgs((prev) => [
-          ...prev,
-          {
-            id: `s-${Date.now()}`,
-            who: "support",
-            text: replyText,
-            time: now(),
-            quote,
-          },
-        ]);
-      } catch (err: any) {
-        setMsgs((prev) => [
-          ...prev,
-          {
-            id: `e-${Date.now()}`,
-            who: "support",
-            text: err.message || "Connection dropped. Try again.",
-            time: now(),
-            error: true,
-          },
-        ]);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [busy, msgs, pendingImage, sessionId],
-  );
-
-  const clear = () => {
-    setMsgs([{ id: "w2", who: "support", text: WELCOME, time: now() }]);
-    setInput("");
-    setPendingImage(null);
-    setSessionId(undefined);
-  };
-
-  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const r = new FileReader();
-    r.onload = () => setPendingImage(r.result as string);
-    r.readAsDataURL(f);
-    e.target.value = "";
-  };
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => setPendingImage(r.result as string); r.readAsDataURL(f); e.target.value = ""; };
 
   return (
     <div className="max-w-[860px] mx-auto px-4 sm:px-6 lg:px-10 py-12 lg:py-20">
@@ -182,7 +127,7 @@ export default function ChatView({
             onClick={clear}
             className="inline-flex items-center gap-1.5 text-xs text-thread hover:text-ink transition-colors shrink-0"
           >
-            <Trash2 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Clear</span>
+            <Plus className="w-3.5 h-3.5" /> <span className="hidden sm:inline">New Chat</span>
           </button>
         </div>
 
@@ -210,6 +155,7 @@ export default function ChatView({
                         : "bg-ink text-bone"
                   }`}
                 >
+                  {renderMarkdown(m.text)}
                   {m.quote && (
                   <div className="mt-2 border border-laser/30 bg-laser/5 p-3">
                     <div className="text-xs font-mono text-laser mb-1">QUOTE</div>

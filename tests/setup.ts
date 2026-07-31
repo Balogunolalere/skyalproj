@@ -12,10 +12,9 @@ vi.mock('next/server', () => ({
 }))
 
 // Set up API keys for tests
-process.env.AGNES_API_KEY = 'test-api-key'
-process.env.PAYSTACK_SECRET_KEY = 'sk_test_12345'
-// Set NODE_ENV using Object.defineProperty since process.env properties can be read-only
-Object.defineProperty(process.env, 'NODE_ENV', { value: 'test', writable: true, configurable: true })
+process.env.AGNES_API_KEY = 'test-api-key';
+process.env.PAYSTACK_SECRET_KEY = 'sk_test_12345';
+(process.env as any).NODE_ENV = 'test';
 
 // Mock localStorage/sessionStorage for Node.js environment
 const mockStore: Record<string, string> = {}
