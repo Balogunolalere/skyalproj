@@ -106,8 +106,7 @@ export default function OrderView({
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [fileData, setFileData] = useState<string | null>(null); // base64 data URL
+  const [uploadFiles, setUploadFiles] = useState<{ name: string; data: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [paymentProcessing, setPaymentProcessing] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -358,31 +357,62 @@ export default function OrderView({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      // Step 0: Upload design file to Cloudinary if present (best-effort, non-blocking)
-      let designFileUrl: string | undefined;
-      let designFilePublicId: string | undefined;
+      // Step 0: Upload design files to Cloudinary if present (best-effort, non-blocking)
+      // Max 5 files, 10MB each, 25MB total
+      const MAX_FILES = 5;
+      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+      const MAX_TOTAL_SIZE = 25 * 1024 * 1024; // 25MB
 
-      if (fileData) {
+      const uploadedFiles: { url: string; publicId: string; name: string }[] = [];
+      const uploadErrors: string[] = [];
+
+      // Validate limits before upload
+      if (uploadFiles.length > MAX_FILES) {
+        setSubmitError(`Maximum ${MAX_FILES} files allowed. You selected ${uploadFiles.length}.`);
+        setSubmitting(false);
+        return;
+      }
+      const totalSize = uploadFiles.reduce((sum, f) => sum + f.data.length, 0);
+      if (totalSize > MAX_TOTAL_SIZE) {
+        setSubmitError(`Total file size (${(totalSize / 1024 / 1024).toFixed(1)}MB) exceeds the 25MB limit.`);
+        setSubmitting(false);
+        return;
+      }
+
+      for (const file of uploadFiles) {
+        if (file.data.length > MAX_FILE_SIZE) {
+          uploadErrors.push(`${file.name}: exceeds 10MB limit`);
+          continue;
+        }
         try {
           const uploadRes = await fetch(`${API_URL}/api/upload`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ file: fileData, folder: 'skyal-designs' }),
+            body: JSON.stringify({ file: file.data, folder: 'skyal-designs' }),
           });
-          // Only parse JSON if response looks like JSON (not an HTML error page)
           const contentType = uploadRes.headers.get('content-type') || '';
           if (uploadRes.ok && contentType.includes('application/json')) {
             const uploadData = await uploadRes.json();
             if (uploadData.data?.url) {
-              designFileUrl = uploadData.data.url;
-              designFilePublicId = uploadData.data.publicId;
+              uploadedFiles.push({
+                url: uploadData.data.url,
+                publicId: uploadData.data.publicId || '',
+                name: file.name,
+              });
             }
           }
-          // If upload fails, silently continue — file name is in notes
         } catch {
-          // File upload is optional — continue without it
+          // Individual file upload failure is non-blocking
         }
       }
+
+      // Build designFileUrl as JSON array (backward compatible with single URL)
+      const designFileUrl = uploadedFiles.length > 0
+        ? JSON.stringify(uploadedFiles.map(f => ({ url: f.url, publicId: f.publicId, name: f.name })))
+        : undefined;
+      const designFilePublicId = uploadedFiles.length > 0
+        ? uploadedFiles.map(f => f.publicId).filter(Boolean).join(',') || undefined
+        : undefined;
 
       // Step 1: Create the order
       const payload: Record<string, unknown> = {
@@ -400,8 +430,12 @@ export default function OrderView({
         payload.designFileUrl = designFileUrl;
         payload.designFilePublicId = designFilePublicId;
       }
-      const noteParts = [notes, fileName ? `--- Design file: ${fileName} ---` : "", referral ? `Referral: ${referral}` : ""].filter(Boolean);
-      if (noteParts.length) payload.customerNotes = noteParts.join("\n");
+      const noteParts: string[] = [notes].filter(Boolean);
+      if (referral) noteParts.push(`Referral: ${referral}`);
+      if (uploadFiles.length > 0) {
+        noteParts.push(`--- Design files: ${uploadFiles.map(f => f.name).join(', ')} ---`);
+      }
+      if (noteParts.length) payload.customerNotes = noteParts.join('\n');
 
       const res = await fetch(`${API_URL}/api/orders`, {
         method: "POST",
@@ -500,8 +534,7 @@ export default function OrderView({
     setDelivery("pickup");
     setAddress("");
     setNotes("");
-    setFileName(null);
-    setFileData(null);
+    setUploadFiles([]);
     setReferral("");
     setQuote(null);
     setSubmitError(null);
@@ -680,27 +713,63 @@ export default function OrderView({
 
                 <div>
                   <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
-                    Design file
+                    Design files <span className="lowercase">(up to 5, max 10MB each)</span>
                   </label>
                   <label className="mt-2 flex items-center gap-3 border border-dashed border-ink/30 bg-bone p-4 cursor-pointer hover:border-laser transition-colors">
                     <Upload className="w-5 h-5 text-thread" />
                     <span className="text-sm text-ink">
-                      {fileName ?? "Drop a file or click to upload — any format"}
+                      {uploadFiles.length > 0
+                        ? `${uploadFiles.length} file${uploadFiles.length > 1 ? 's' : ''} selected`
+                        : "Drop files or click to upload — any format"}
                     </span>
                     <input
                       type="file"
+                      multiple
                       className="hidden"
                       onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) { setFileName(null); setFileData(null); return; }
-                        setFileName(file.name);
-                        // Read file as base64 data URL so admin can view it
-                        const reader = new FileReader();
-                        reader.onload = () => setFileData(reader.result as string);
-                        reader.readAsDataURL(file);
+                        const selectedFiles = Array.from(e.target.files || []);
+                        if (selectedFiles.length === 0) { setUploadFiles([]); return; }
+                        if (selectedFiles.length > 5) {
+                          alert('Maximum 5 files allowed.');
+                          return;
+                        }
+                        // Read all files as base64
+                        const newFiles: { name: string; data: string }[] = [];
+                        let loaded = 0;
+                        for (const file of selectedFiles) {
+                          if (file.size > 10 * 1024 * 1024) {
+                            alert(`${file.name} exceeds the 10MB limit.`);
+                            continue;
+                          }
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            newFiles.push({ name: file.name, data: reader.result as string });
+                            loaded++;
+                            if (loaded === selectedFiles.length || loaded === newFiles.length) {
+                              setUploadFiles([...newFiles]);
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        }
                       }}
                     />
                   </label>
+                  {uploadFiles.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {uploadFiles.map((f, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs text-thread">
+                          <span className="font-mono">{f.name}</span>
+                          <span className="text-thread/50">({(f.data.length / 1024).toFixed(0)}KB)</span>
+                          <button
+                            onClick={() => setUploadFiles(uploadFiles.filter((_, j) => j !== i))}
+                            className="text-oxblood hover:text-ink ml-auto"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -822,7 +891,7 @@ export default function OrderView({
                 <Row k="Name" v={name || "—"} />
                 <Row k="Phone" v={phone || "—"} />
                 {email && <Row k="Email" v={email} />}
-                {fileName && <Row k="Design file" v={fileName} />}
+                {uploadFiles.length > 0 && <Row k="Design files" v={uploadFiles.map(f => f.name).join(', ')} />}
                 {notes && <Row k="Notes" v={notes} />}
               </dl>
               <div className="mt-6 flex items-baseline justify-between bg-vellum border border-hairline p-5">

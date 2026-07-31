@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { Logo } from "../Logo";
-import { Send, Trash2, Loader2, AlertCircle, RotateCcw, Paperclip, X } from "lucide-react";
+import { Send, Trash2, AlertCircle, Paperclip, X, ArrowRight, Loader2 } from "lucide-react";
 
 interface Msg {
   id: string;
@@ -13,6 +13,7 @@ interface Msg {
   time: string;
   error?: boolean;
   image?: string;
+  quote?: { price: number; summary?: string; renderOrderNow?: boolean };
 }
 
 const SUGGESTIONS = [
@@ -25,12 +26,14 @@ const SUGGESTIONS = [
 const WELCOME =
   "Hi! I'm the Skyal assistant. I can help with quotes, order tracking, materials and turnaround times. What are you cutting?";
 
+const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
+
 function now() {
   return new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
 export default function ChatView({
-  onNavigate: _onNavigate,
+  onNavigate,
 }: {
   onNavigate: (v: ViewId) => void;
 }) {
@@ -38,6 +41,7 @@ export default function ChatView({
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | undefined>();
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -53,6 +57,7 @@ export default function ChatView({
     async (text: string) => {
       const clean = text.trim();
       if ((!clean && !pendingImage) || busy) return;
+
       const userMsg: Msg = {
         id: `u-${Date.now()}`,
         who: "customer",
@@ -60,41 +65,68 @@ export default function ChatView({
         time: now(),
         image: pendingImage ?? undefined,
       };
-      const history = [...msgs, userMsg];
-      setMsgs(history);
+      const newMsgs = [...msgs, userMsg];
+      setMsgs(newMsgs);
       setInput("");
       const image = pendingImage;
       setPendingImage(null);
       setBusy(true);
 
       try {
-        const res = await fetch("/api/chat", {
+        // Build history for LLM context (skip welcome and error messages)
+        const history = msgs
+          .filter((m) => !m.error && m.id !== "w")
+          .map((m) => ({
+            role: m.who === "support" ? "assistant" : "user",
+            content: m.text,
+          }));
+
+        const payload: Record<string, unknown> = {
+          message: clean,
+          brand: "skyal",
+          mode: "live",
+          history,
+        };
+        if (sessionId) payload.sessionId = sessionId;
+        if (image) payload.image_base64 = image;
+
+        const res = await fetch(`${API_URL}/api/skyal/chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: history
-              .filter((m) => !m.error && m.id !== "w")
-              .map((m) => ({ role: m.who === "support" ? "assistant" : "user", content: m.text })),
-          }),
+          body: JSON.stringify(payload),
         });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData?.error || `Chat failed (${res.status})`);
+        }
+
         const data = await res.json();
+
+        if (data.sessionId) setSessionId(data.sessionId);
+
+        const replyText = data.assistant_text || data.reply || "(no response)";
+        const quote = data.quote
+          ? { price: data.quote.price, summary: data.quote.summary, renderOrderNow: data.render_order_now }
+          : undefined;
+
         setMsgs((prev) => [
           ...prev,
           {
             id: `s-${Date.now()}`,
             who: "support",
-            text: data.reply || "(no response)",
+            text: replyText,
             time: now(),
-            error: data.error,
+            quote,
           },
         ]);
-      } catch {
+      } catch (err: any) {
         setMsgs((prev) => [
           ...prev,
           {
             id: `e-${Date.now()}`,
             who: "support",
-            text: "Connection dropped. Try again.",
+            text: err.message || "Connection dropped. Try again.",
             time: now(),
             error: true,
           },
@@ -103,13 +135,14 @@ export default function ChatView({
         setBusy(false);
       }
     },
-    [busy, msgs, pendingImage],
+    [busy, msgs, pendingImage, sessionId],
   );
 
   const clear = () => {
     setMsgs([{ id: "w2", who: "support", text: WELCOME, time: now() }]);
     setInput("");
     setPendingImage(null);
+    setSessionId(undefined);
   };
 
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -177,8 +210,25 @@ export default function ChatView({
                         : "bg-ink text-bone"
                   }`}
                 >
-                  {m.error && <AlertCircle className="w-4 h-4 inline mr-1.5 align-text-bottom" />}
-                  <span className="whitespace-pre-wrap">{m.text}</span>
+                  {m.quote && (
+                  <div className="mt-2 border border-laser/30 bg-laser/5 p-3">
+                    <div className="text-xs font-mono text-laser mb-1">QUOTE</div>
+                    <div className="text-sm font-bold text-ink">
+                      ₦{m.quote.price.toLocaleString("en-NG")}
+                    </div>
+                    {m.quote.summary && (
+                      <div className="text-xs text-thread mt-1">{m.quote.summary}</div>
+                    )}
+                    {m.quote.renderOrderNow && (
+                      <button
+                        onClick={() => onNavigate("order")}
+                        className="mt-2 inline-flex items-center gap-1 text-xs bg-laser text-white px-3 py-1.5 hover:bg-ink transition-colors"
+                      >
+                        Order Now <ArrowRight className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                )}
                 </div>
                 <div className={`text-[10px] text-thread mt-1 font-mono ${m.who === "customer" ? "text-right" : ""}`}>
                   {m.time}
