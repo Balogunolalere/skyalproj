@@ -13,7 +13,7 @@ interface Msg {
   time: string;
   error?: boolean;
   image?: string;
-  quote?: { price: number; summary?: string; renderOrderNow?: boolean };
+  quote?: { price: number; summary?: string; renderOrderNow?: boolean; breakdown?: Record<string, unknown> };
 }
 
 const SUGGESTIONS = [
@@ -57,7 +57,13 @@ function renderMarkdown(text: string): React.ReactNode[] {
   return parts;
 }
 
-export default function ChatView({ onNavigate }: { onNavigate: (v: ViewId) => void }) {
+export default function ChatView({
+  onNavigate,
+  onOrderWithQuote,
+}: {
+  onNavigate: (v: ViewId) => void;
+  onOrderWithQuote?: (quote: { price: number; summary?: string; breakdown?: Record<string, unknown> }) => void;
+}) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -87,7 +93,7 @@ export default function ChatView({ onNavigate }: { onNavigate: (v: ViewId) => vo
       const data = await res.json();
       if (data.sessionId) setSessionId(data.sessionId);
       const replyText = data.assistant_text || data.reply || "(no response)";
-      const quote = data.quote ? { price: data.quote.price, summary: data.quote.summary, renderOrderNow: data.render_order_now } : undefined;
+      const quote = data.quote ? { price: data.quote.price, summary: data.quote.summary, renderOrderNow: data.render_order_now, breakdown: data.quote.breakdown } : undefined;
 
       setMsgs(prev => [...prev, { id: `s-${Date.now()}`, who: "support", text: replyText, time: now(), quote }]);
     } catch (err: any) {
@@ -167,7 +173,7 @@ export default function ChatView({ onNavigate }: { onNavigate: (v: ViewId) => vo
                     )}
                     {m.quote.renderOrderNow && (
                       <button
-                        onClick={() => onNavigate("order")}
+                        onClick={() => onOrderWithQuote ? onOrderWithQuote(m.quote!) : onNavigate("order")}
                         className="mt-2 inline-flex items-center gap-1 text-xs bg-laser text-white px-3 py-1.5 hover:bg-ink transition-colors"
                       >
                         Order Now <ArrowRight className="w-3 h-3" />

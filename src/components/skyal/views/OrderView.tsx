@@ -89,8 +89,10 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export default function OrderView({
   onNavigate,
+  chatQuote,
 }: {
   onNavigate: (v: ViewId) => void;
+  chatQuote?: { price: number; summary?: string; breakdown?: Record<string, unknown> } | null;
 }) {
   const [step, setStep] = useState(0);
   const [services, setServices] = useState<Service[]>([]);
@@ -108,6 +110,38 @@ export default function OrderView({
   const [notes, setNotes] = useState("");
   const [uploadFiles, setUploadFiles] = useState<{ name: string; data: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [chatPrefillApplied, setChatPrefillApplied] = useState(false);
+
+  // Prefill from chat quote
+  useEffect(() => {
+    if (chatPrefillApplied || !chatQuote || servicesLoading || services.length === 0) return;
+    const breakdown = chatQuote.breakdown || {};
+    const serviceLabel = (breakdown.serviceLabel as string || '').toLowerCase().trim();
+
+    // Match service: exact label → partial → type key → fuzzy
+    let match = services.find((s: Service) => s.label.toLowerCase() === serviceLabel);
+    if (!match) match = services.find((s: Service) => s.label.toLowerCase().includes(serviceLabel) || serviceLabel.includes(s.label.toLowerCase()));
+    if (!match && breakdown.serviceType) {
+      const st = String(breakdown.serviceType).toLowerCase();
+      match = services.find((s: Service) => s.type.toLowerCase() === st) || services.find((s: Service) => s.type.toLowerCase().includes(st));
+    }
+
+    // Build notes from AI discussion
+    const aiNotes = [
+      serviceLabel ? `AI discussed: ${breakdown.serviceLabel}` : '',
+      breakdown.lead_time ? `Lead time: ${breakdown.lead_time}` : '',
+      breakdown.notes ? String(breakdown.notes) : '',
+    ].filter(Boolean).join('. ');
+
+    if (match) setServiceType(match.type);
+    setQty((breakdown.quantity as number) || 1);
+    setSla((breakdown.sla === 'Express') ? 'Express' : 'Standard');
+    if ((breakdown.deliveryFee as number || 0) > 0) setDelivery('lagos');
+    if (aiNotes) setNotes(aiNotes);
+    // Jump to step 2 (skip "pick service" since it's prefilled)
+    if (match) setStep(1);
+    setChatPrefillApplied(true);
+  }, [chatQuote, services, servicesLoading, chatPrefillApplied]);
   const [paymentProcessing, setPaymentProcessing] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [quote, setQuote] = useState<QuoteResponse | null>(null);

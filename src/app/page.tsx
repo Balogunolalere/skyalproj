@@ -46,6 +46,7 @@ function hashToView(): ViewId {
 
 export default function Home() {
   const [view, setView] = useState<ViewId>("home");
+  const [chatQuote, setChatQuote] = useState<{ price: number; summary?: string; breakdown?: Record<string, unknown> } | null>(null);
 
   // Sync from hash on mount + on hashchange
   useEffect(() => {
@@ -56,15 +57,19 @@ export default function Home() {
   }, []);
 
   // Navigate: set hash (which drives view), scroll to top.
-  // For in-page anchors we let the browser handle scrolling.
   const navigate = useCallback((v: ViewId) => {
     if (typeof window !== "undefined") {
       window.location.hash = v;
-      // hashchange will update view; scroll top for view switches
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
     setView(v);
   }, []);
+
+  // Navigate to order with quote data from chat
+  const navigateToOrderWithQuote = useCallback((quote: { price: number; summary?: string; breakdown?: Record<string, unknown> }) => {
+    setChatQuote(quote);
+    navigate("order");
+  }, [navigate]);
 
   // Scroll to top when the view changes (not for in-page anchors)
   useEffect(() => {
@@ -79,10 +84,10 @@ export default function Home() {
       <Nav view={view} onNavigate={navigate} />
       <main className="flex-1 mt-16">
         {view === "home" && <HomeView onNavigate={navigate} />}
-        {view === "order" && <OrderView onNavigate={navigate} />}
+        {view === "order" && <OrderView onNavigate={navigate} chatQuote={chatQuote} />}
         {view === "track" && <TrackView onNavigate={navigate} />}
         {view === "dashboard" && <DashboardView onNavigate={navigate} />}
-        {view === "chat" && <ChatView onNavigate={navigate} />}
+        {view === "chat" && <ChatView onNavigate={navigate} onOrderWithQuote={navigateToOrderWithQuote} />}
         {view === "login" && <LoginView onNavigate={navigate} />}
         {view === "contact" && <ContactView onNavigate={navigate} />}
         {view === "privacy" && <PrivacyView onNavigate={navigate} />}
