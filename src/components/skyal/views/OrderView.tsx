@@ -5,6 +5,8 @@ import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { ArrowLeft, ArrowRight, Check, Upload, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from 'sonner';
+import { matchChatQuoteToService, buildChatOrderNotes } from "@/lib/chat-order";
+import type { ChatQuote } from "@/lib/chat";
 
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
@@ -92,7 +94,7 @@ export default function OrderView({
   chatQuote,
 }: {
   onNavigate: (v: ViewId) => void;
-  chatQuote?: { price: number; summary?: string; breakdown?: Record<string, unknown> } | null;
+  chatQuote?: { price: number; summary?: string; breakdown?: Record<string, unknown>; context?: string } | null;
 }) {
   const [step, setStep] = useState(0);
   const [services, setServices] = useState<Service[]>([]);
@@ -111,35 +113,39 @@ export default function OrderView({
   const [uploadFiles, setUploadFiles] = useState<{ name: string; data: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [chatPrefillApplied, setChatPrefillApplied] = useState(false);
+  const [chatMapping, setChatMapping] = useState<{ fromLabel: string; toLabel: string; mapped: boolean } | null>(null);
 
-  // Prefill from chat quote
+  // Prefill from chat quote: map the AI's quoted service onto the catalog
+  // (even when there is no exact template — "Full Buba" → fabric_buba etc.),
+  // prefill quantity/SLA/delivery/notes from the quote breakdown, and jump to
+  // the Details step so the customer only reviews, doesn't re-enter everything.
   useEffect(() => {
     if (chatPrefillApplied || !chatQuote || servicesLoading || services.length === 0) return;
     const breakdown = chatQuote.breakdown || {};
-    const serviceLabel = (breakdown.serviceLabel as string || '').toLowerCase().trim();
+    const quote = chatQuote as ChatQuote;
+    const { service, mapped } = matchChatQuoteToService(quote, services);
+    const notes = buildChatOrderNotes(quote, chatQuote.context || null);
 
-    // Match service: exact label → partial → type key → fuzzy
-    let match = services.find((s: Service) => s.label.toLowerCase() === serviceLabel);
-    if (!match) match = services.find((s: Service) => s.label.toLowerCase().includes(serviceLabel) || serviceLabel.includes(s.label.toLowerCase()));
-    if (!match && breakdown.serviceType) {
-      const st = String(breakdown.serviceType).toLowerCase();
-      match = services.find((s: Service) => s.type.toLowerCase() === st) || services.find((s: Service) => s.type.toLowerCase().includes(st));
-    }
-
-    // Build notes from AI discussion
-    const aiNotes = [
-      serviceLabel ? `AI discussed: ${breakdown.serviceLabel}` : '',
-      breakdown.lead_time ? `Lead time: ${breakdown.lead_time}` : '',
-      breakdown.notes ? String(breakdown.notes) : '',
-    ].filter(Boolean).join('. ');
-
-    if (match) setServiceType(match.type);
-    setQty((breakdown.quantity as number) || 1);
-    setSla((breakdown.sla === 'Express') ? 'Express' : 'Standard');
+    // ALWAYS select a service when a match/fallback exists — even when the AI
+    // item has no exact template (e.g. "Full Buba" → fabric_buba).
+    if (service) setServiceType(service.type);
+    setQty(typeof breakdown.quantity === 'number' && breakdown.quantity > 0 ? breakdown.quantity : 1);
+    setSla(breakdown.sla === 'Express' ? 'Express' : 'Standard');
     if ((breakdown.deliveryFee as number || 0) > 0) setDelivery('lagos');
-    if (aiNotes) setNotes(aiNotes);
-    // Jump to step 2 (skip "pick service" since it's prefilled)
-    if (match) setStep(1);
+    if (notes) setNotes(notes);
+
+    // Tell the customer when the AI's item was mapped to a different catalog
+    // service (e.g. "Full Buba" is an exact match; "Wedding buba set" → mapped).
+    if (service) {
+      const labelDiffers =
+        !!breakdown.serviceLabel &&
+        String(breakdown.serviceLabel).trim().toLowerCase() !== service.label.trim().toLowerCase();
+      if (mapped || labelDiffers) {
+        setChatMapping({ fromLabel: String(breakdown.serviceLabel || 'your request'), toLabel: service.label, mapped });
+      }
+    }
+    // Jump to the Details step (index 1) when the service was prefilled
+    if (service) setStep(1);
     setChatPrefillApplied(true);
   }, [chatQuote, services, servicesLoading, chatPrefillApplied]);
   const [paymentProcessing, setPaymentProcessing] = useState(false);
@@ -609,6 +615,23 @@ export default function OrderView({
       </div>
       <div className="h-px bg-hairline mb-10" />
 
+      {/* Chat-quote mapping notice: the AI's item was mapped to a different
+          catalog service — tell the customer, let them change it. */}
+      {chatMapping && (
+        <div className="mb-8 border border-laser/40 bg-laser/5 p-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <p className="text-sm text-ink leading-relaxed">
+            From your chat: “{chatMapping.fromLabel}” — mapped to “{chatMapping.toLabel}”
+            {chatMapping.mapped ? " (closest available service)" : ""}. You can change it below.
+          </p>
+          <button
+            onClick={() => setStep(0)}
+            className="ml-auto text-xs font-medium text-laser hover:text-ink transition-colors underline underline-offset-2"
+          >
+            Change service
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-10">
         {/* ── Step body ── */}
         <div>
@@ -648,7 +671,7 @@ export default function OrderView({
                     {list.map((s) => (
                       <button
                         key={s.id}
-                        onClick={() => setServiceType(s.type)}
+                        onClick={() => { setServiceType(s.type); setChatMapping(null); }}
                         className={`text-left p-5 border transition-colors ${
                           serviceType === s.type
                             ? "border-laser bg-vellum"

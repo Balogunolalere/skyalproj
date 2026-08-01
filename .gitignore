@@ -34,3 +34,8 @@ coverage/
 .nyc_output/
 *.test.js
 *.spec.js
+.reasonix/*
+scripts/data/
+tests/datasets/
+__pycache__/
+*.pyc

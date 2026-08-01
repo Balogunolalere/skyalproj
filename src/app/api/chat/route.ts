@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  RateLimiter,
+  retryWithBackoff,
+  parseEnvInt,
+  generateSessionId,
+  extractQuote,
+  cleanAssistantText,
+  sanitizeHistory,
+  isInjectionAttempt,
+} from "@/lib/chat";
 
 export const runtime = "nodejs";
+// Vercel function duration — required so slow Agnes calls (20-45s) aren't
+// killed as 504s. Hobby caps at 60s; on Pro you can raise to 300 and bump
+// TOTAL_TIMEOUT.
+export const maxDuration = 60;
 
 // ═══════════════════════════════════════════════════════════════════════
 // COMPLETE SKYAL SERVICE CATALOG — Accurate pricing for AI quotes
 // ═══════════════════════════════════════════════════════════════════════
 
-const SKYAL_SYSTEM_PROMPT = `You are Skyal's AI Assistant — the friendly, knowledgeable voice of Skyal Laser Services, a precision laser cutting business in Ogba, Ikeja, Lagos, Nigeria.
+export const SKYAL_SYSTEM_PROMPT = `You are Skyal's AI Assistant — the friendly, knowledgeable voice of Skyal Laser Services, a precision laser cutting business in Ogba, Ikeja, Lagos, Nigeria.
 
 # YOUR IDENTITY
 - You represent Skyal Laser Services (sister brand to Paberin Creations)
@@ -56,54 +70,94 @@ FREE pickup (Ogba, Ikeja, Lagos) | Lagos delivery: ₦1,500-₦3,000 | Nationwid
 Answer conversationally first. If a COMPLETE quote is ready, append EXACTLY:
 
 [QUOTE]
-{"service_type":"<key>","service_label":"<name>","quantity":<num>,"sla":"Standard|Express","unit_price":<num>,"subtotal":<num>,"express_surcharge":<num>,"delivery_fee":<num>,"total":<num>,"lead_time":"<text>","notes":"<text>"}
+{
+  "service_type": "<service_type_key>",
+  "service_label": "<human readable name>",
+  "quantity": <number>,
+  "sla": "Standard" or "Express",
+  "unit_price": <base_price_per_unit_in_naira_BEFORE_surcharges>,
+  "subtotal": <quantity × unit_price>,
+  "express_surcharge": <0_or_surcharge_amount>,
+  "add_ons_total": <0_or_total_of_add_ons>,
+  "discount": <0_or_discount_amount>,
+  "delivery_fee": <0_or_fee>,
+  "total": <subtotal + express_surcharge + add_ons_total + delivery_fee − discount>,
+  "original_price": <optional_pre_discount_price>,
+  "lead_time": "<human readable>",
+  "notes": "<any caveats or important info>"
+}
 [/QUOTE]
+
+IMPORTANT: the [QUOTE] JSON must be plain text — NEVER wrap it in markdown code fences (triple backticks), NEVER add trailing commas, and make sure "total" matches the sum of its components exactly.
 
 If info is missing, NEVER output [QUOTE] — ask clarifying questions instead.`;
 
 // ════════════════════════════════════════════════════════════════
-// Configuration
+// Configuration — validated env values; invalid ones fall back to defaults
 // ════════════════════════════════════════════════════════════════
 
-const MAX_REQUESTS = 15;
-const RATE_WINDOW_MS = 60000;
+const FETCH_TIMEOUT = parseEnvInt('FETCH_TIMEOUT', 20000); // per-attempt timeout in ms
+const MAX_RETRIES = parseEnvInt('MAX_RETRIES', 2);
+const RETRY_BASE_DELAY = parseEnvInt('RETRY_BASE_DELAY', 1000); // ms
+const TOTAL_BUDGET_MS = parseEnvInt('TOTAL_TIMEOUT', 45000); // cap across all attempts (keep < maxDuration on Vercel)
+const RATE_LIMIT_MAX = parseEnvInt('RATE_LIMIT_MAX', 15);
+const RATE_LIMIT_WINDOW = parseEnvInt('RATE_LIMIT_WINDOW', 60000); // 1min default
 const CACHE_TTL_MS = 60000;
 const MAX_CACHE = 100;
 const MAX_MSG_LEN = 8000;
-const MAX_HISTORY = 50;
 
 const ADMIN_API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
-// ── Rate limiter ──
-const rateStore = new Map<string, { count: number; start: number }>();
-function clientIp(req: NextRequest) { const x = req.headers.get("x-forwarded-for"); return x ? x.split(",")[0].trim() : "unknown"; }
-function rateLimited(ip: string): boolean {
-  const now = Date.now(); const k = `r:${ip}`; const e = rateStore.get(k);
-  if (!e || now - e.start > RATE_WINDOW_MS) { rateStore.set(k, { count: 1, start: now }); return false; }
-  if (e.count >= MAX_REQUESTS) return true; e.count++; return false;
-}
+// ── Rate limiter (per client IP) ──
+const rateLimiter = new RateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW);
 
-// ── Cache ──
+// ── Response cache (60s TTL) ──
 const cache = new Map<string, { reply: string; ts: number }>();
 function cacheKey(msgs: Array<{ role: string; content: string }>) { return msgs.filter(m => m.role !== "system").map(m => `${m.role}:${m.content}`).join("|"); }
 function cacheGet(k: string): string | null { const e = cache.get(k); if (!e || Date.now() - e.ts > CACHE_TTL_MS) { cache.delete(k); return null; } return e.reply; }
 function cacheSet(k: string, v: string) { if (cache.size >= MAX_CACHE) { const f = cache.keys().next(); if (!f.done) cache.delete(f.value); } cache.set(k, { reply: v, ts: Date.now() }); }
 
-// ── Quote extraction ──
-function parseQuote(text: string) { const m = text.match(/\[QUOTE\]\s*([\s\S]*?)\s*\[\/QUOTE\]/); if (!m) return undefined; try { const q = JSON.parse(m[1].trim()); if (!q.total || q.total <= 0) return undefined; return { price: q.total, summary: `${q.service_label || ''}: ${q.quantity || 1}× ₦${(q.unit_price || q.total).toLocaleString('en-NG')} = ₦${q.total.toLocaleString('en-NG')}`, breakdown: q }; } catch { return undefined; } }
-function cleanText(t: string) { return t.replace(/\[QUOTE\][\s\S]*?\[\/QUOTE\]/g, '').trim(); }
-function newSessionId() { return `skyal_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`; }
-
 // ── Save to admin backend (fire-and-forget, best-effort) ──
 async function saveToAdmin(sessionId: string, messages: Array<{ role: string; content: string }>) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
   try {
     await fetch(`${ADMIN_API_URL}/api/skyal/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: messages[messages.length - 1]?.content || '', brand: "skyal", mode: "live", history: messages.slice(0, -1), sessionId }),
-      signal: AbortSignal.timeout(5000),
+      signal: controller.signal,
     });
-  } catch { /* best-effort */ }
+  } catch {
+    // Best-effort: admin save failure must not affect the customer
+    console.warn('[Skyal Chat] Admin session save failed (non-critical)');
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/** Statuses worth retrying — everything else is a hard failure. */
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+
+/** Error carrying an HTTP status from the Agnes API (used to decide retries). */
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
+
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof HttpError) return RETRYABLE_STATUS.has(error.status);
+  if (error instanceof Error) {
+    // AbortError = our per-attempt timeout fired; TimeoutError = upstream timeout;
+    // TypeError = network-level fetch failure (DNS, connection reset, …)
+    return error.name === 'AbortError' || error.name === 'TimeoutError' || error.name === 'TypeError';
+  }
+  return false;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -112,84 +166,220 @@ async function saveToAdmin(sessionId: string, messages: Array<{ role: string; co
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    let message = typeof body?.message === 'string' ? body.message.trim() : '';
-    const history = Array.isArray(body?.history) ? body.history : [];
-    let messages = Array.isArray(body?.messages) ? body.messages : [];
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json(
+        { error: 'Invalid request body', message: 'Please send a valid JSON body.', reply: 'Please send a valid JSON body.' },
+        { status: 400 }
+      );
+    }
+    const {
+      message: rawMessage,
+      history,
+      brand = 'skyal',
+      sessionId: incomingSessionId,
+    } = body as Record<string, unknown>;
 
     // Support both input formats
+    let message = typeof rawMessage === 'string' ? rawMessage.trim() : '';
+    let messages = Array.isArray(body.messages) ? body.messages : [];
     if (!message && messages.length > 0) {
       const last = [...messages].reverse().find((m: any) => m.role === 'user');
-      message = last?.content || '';
+      message = typeof last?.content === 'string' ? last.content : '';
     }
-    if (messages.length === 0 && history.length > 0) messages = [...history, { role: 'user', content: message }];
+    if (messages.length === 0 && Array.isArray(history) && history.length > 0) messages = [...history, { role: 'user', content: message }];
     if (messages.length === 0 && message) messages = [{ role: 'user', content: message }];
 
-    // Validate
-    if (!message) return NextResponse.json({ error: 'Message required', reply: 'Please type a message.' }, { status: 400 });
-    if (message.length > MAX_MSG_LEN) return NextResponse.json({ error: 'Too long', reply: `Max ${MAX_MSG_LEN} characters.` }, { status: 400 });
+    // ── Input validation ──
+    if (typeof message !== 'string' || message.trim() === '') {
+      return NextResponse.json(
+        { error: 'Message is required', message: 'Please type a message to chat with the assistant.', reply: 'Please type a message.' },
+        { status: 400 }
+      );
+    }
+    message = message.trim();
 
-    // Prompt injection guard
-    const inj = [/^system:\s*/im, /^\[system\]\s*/im, /ignore (all |your )?(previous |prior )?instructions/i, /you are now /i, /forget everything/i, /override your /i];
-    if (message.length < 200 && inj.some(p => p.test(message))) return NextResponse.json({ error: 'Invalid', reply: 'I can only help with Skyal laser cutting services.' }, { status: 400 });
+    // Reject excessively long messages
+    if (message.length > MAX_MSG_LEN) {
+      return NextResponse.json(
+        { error: 'Message too long', message: `Please keep your message under ${MAX_MSG_LEN} characters. Try breaking it into smaller parts.`, reply: `Max ${MAX_MSG_LEN} characters.` },
+        { status: 400 }
+      );
+    }
 
-    // Sanitize
-    const sanitized = messages.filter((m: any) => m?.role && m?.content && typeof m.content === 'string').slice(-MAX_HISTORY);
+    // Sanitize history: max 50 turns, only user/assistant, strip empty/long content.
+    // `history` is the canonical source; when the caller used the `messages`
+    // array format, the current message is the last user entry, so the rest of
+    // the array becomes the conversation context.
+    const historySource = Array.isArray(history)
+      ? history
+      : messages.slice(0, -1).filter((m: any) => m?.role !== 'system');
+    const sanitizedHistory = sanitizeHistory(historySource);
 
-    // Rate limit
-    if (rateLimited(clientIp(req))) return NextResponse.json({ error: 'Rate limited', reply: 'Too many requests. Try again later.', rateLimit: true }, { status: 429 });
+    // Reject messages that look like prompt injection / system override attempts.
+    // History is fully client-controlled, so it must be scanned too — an attacker
+    // can otherwise smuggle instructions in via history and bypass the check.
+    const injected =
+      isInjectionAttempt(message) ||
+      sanitizedHistory.some((m) => m.role === 'user' && isInjectionAttempt(m.content));
+    if (injected) {
+      return NextResponse.json(
+        { error: 'Invalid message', message: 'I can only help with questions about Skyal laser cutting services.', reply: 'I can only help with questions about Skyal laser cutting services.' },
+        { status: 400 }
+      );
+    }
+
+    // ── Rate limit check (per client IP) ──
+    // Use the LAST x-forwarded-for entry: proxies append the client IP, so the
+    // rightmost entry is the one closest to this server and the least
+    // attacker-influenceable among the entries (on Vercel it is set by the
+    // platform itself). Note: this limiter is a blunt per-instance instrument,
+    // not a hard security boundary.
+    const forwardedFor = req.headers.get('x-forwarded-for');
+    const clientIp = (forwardedFor ? forwardedFor.split(',') : []).map((s) => s.trim()).filter(Boolean).pop() || 'unknown';
+    if (!rateLimiter.acquire(clientIp)) {
+      return NextResponse.json(
+        {
+          error: 'Rate limit exceeded',
+          message: `Too many requests. Please try again later. Limit: ${RATE_LIMIT_MAX} per ${RATE_LIMIT_WINDOW / 1000} seconds.`,
+          reply: 'Too many requests. Try again later.',
+          rateLimit: true,
+        },
+        { status: 429 }
+      );
+    }
 
     const key = process.env.AGNES_API_KEY;
-    if (!key) return NextResponse.json({ reply: 'AI not configured. Contact support.', error: true }, { status: 500 });
+    if (!key) return NextResponse.json({ reply: 'AI not configured. Contact support.', error: 'AI not configured' }, { status: 500 });
 
-    const sid = body?.sessionId || newSessionId();
+    // Generate or reuse session ID for conversation continuity
+    const sessionId =
+      typeof incomingSessionId === 'string' && incomingSessionId.length <= 128
+        ? incomingSessionId
+        : generateSessionId();
 
-    // Build Agnes messages
-    const agnesMsgs = [{ role: "system", content: SKYAL_SYSTEM_PROMPT }, ...sanitized.map((m: any) => ({ role: m.role === "assistant" ? "assistant" as const : "user" as const, content: m.content.slice(0, 4000) }))];
+    // Build Agnes messages (system prompt + sanitized history + current message)
+    const agnesMsgs = [
+      { role: 'system' as const, content: SKYAL_SYSTEM_PROMPT },
+      ...sanitizedHistory,
+      { role: 'user' as const, content: message },
+    ];
 
-    // Cache
+    // ── Response cache ──
     const ck = cacheKey(agnesMsgs);
     const cached = cacheGet(ck);
     if (cached) {
-      const q = parseQuote(cached);
-      return NextResponse.json({ reply: cleanText(cached), assistant_text: cleanText(cached), quote: q, render_order_now: !!q, sessionId: sid, cached: true });
+      const q = extractQuote(cached);
+      const reply = cleanAssistantText(cached);
+      return NextResponse.json({ reply, assistant_text: reply, quote: q, render_order_now: !!q, sessionId, cached: true });
     }
 
-    // Call Agnes
-    const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), 60000);
-    const res = await fetch("https://apihub.agnes-ai.com/v1/chat/completions", {
-      method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "agnes-2.0-flash", messages: agnesMsgs, temperature: 0.5, max_tokens: 2048 }),
-      signal: ctrl.signal,
+    // ── Call Agnes 2.0 Flash with per-attempt timeout + retry/backoff ──
+    // Each attempt gets its OWN AbortController + timeout: an aborted
+    // controller stays aborted, so sharing one across retries would make
+    // every retry after a timeout fail instantly (and the timeout must be
+    // re-armed per attempt, not cleared after the first fetch).
+    const fetchStartTime = performance.now();
+
+    const callAgnes = async (remainingBudgetMs: number) => {
+      // Shrink the per-attempt timeout to fit the remaining total budget so a
+      // single attempt can't burn 30s past the 60s cap. Floor at 500ms: if the
+      // budget is nearly gone, the pre-attempt check in retryWithBackoff
+      // already stops us from starting.
+      const attemptTimeout = Math.max(500, Math.min(FETCH_TIMEOUT, remainingBudgetMs));
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), attemptTimeout);
+      try {
+        const response = await fetch("https://apihub.agnes-ai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "agnes-2.0-flash", messages: agnesMsgs, temperature: 0.5, max_tokens: 4096 }),
+          signal: controller.signal,
+        });
+
+        // ── Handle API errors ──
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => 'Unknown error');
+          const status = response.status;
+
+          // 401/403 and other 4xx are hard failures — never retried
+          if (status === 401 || status === 403) {
+            throw new Error(`Agnes API authentication error (${status}). Check AGNES_API_KEY.`);
+          }
+          if (RETRYABLE_STATUS.has(status)) {
+            throw new HttpError(
+              status,
+              status === 429
+                ? `Agnes API rate limit exceeded (429). Try again in a few seconds.`
+                : `Agnes API server error (${status}). The model may be temporarily unavailable.`
+            );
+          }
+          throw new Error(`Agnes API error: ${status} - ${errorText.substring(0, 200)}`);
+        }
+
+        return (await response.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    let data: { choices?: Array<{ message?: { content?: string } }> };
+    try {
+      data = await retryWithBackoff(callAgnes, {
+        maxRetries: MAX_RETRIES,
+        baseDelay: RETRY_BASE_DELAY,
+        budgetMs: TOTAL_BUDGET_MS,
+        shouldRetry: isRetryableError,
+      });
+    } catch (error: any) {
+      if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
+        throw new Error(`Agnes API request timed out after ${FETCH_TIMEOUT}ms`);
+      }
+      throw error;
+    }
+
+    const fetchLatency = Math.floor(performance.now() - fetchStartTime);
+
+    // ── Parse response ──
+    const rawAssistantText = data.choices?.[0]?.message?.content || '';
+    const quote = extractQuote(rawAssistantText);
+    const assistantText = cleanAssistantText(rawAssistantText);
+
+    if (ck) cacheSet(ck, rawAssistantText);
+
+    // ── Fire-and-forget: save session to admin backend for admin viewing ──
+    const allMsgs = [
+      ...sanitizedHistory,
+      { role: 'user' as const, content: message },
+      { role: 'assistant' as const, content: assistantText },
+    ];
+    saveToAdmin(sessionId, allMsgs).catch(() => {}); // Explicitly swallow — must not throw
+
+    return NextResponse.json({
+      reply: assistantText,
+      assistant_text: assistantText,
+      quote: quote || undefined,
+      render_order_now: !!quote,
+      sessionId,
+      latency_ms: fetchLatency,
+      error: undefined,
+      brand: typeof brand === 'string' && brand.length <= 32 ? brand : 'skyal',
     });
-    clearTimeout(tid);
-
-    if (!res.ok) {
-      const et = await res.text().catch(() => '');
-      const s = res.status;
-      if (s === 401 || s === 403) throw new Error("AI auth error");
-      if (s === 429) throw new Error("AI busy");
-      throw new Error(`AI error ${s}: ${et.substring(0, 200)}`);
-    }
-
-    const data = await res.json();
-    const raw = data.choices[0]?.message?.content?.trim() || "";
-    const quote = parseQuote(raw);
-    const reply = cleanText(raw);
-
-    if (ck) cacheSet(ck, raw);
-
-    // Fire-and-forget save to admin
-    const allMsgs = [...sanitized.map((m: any) => ({ role: m.role, content: m.content })), { role: 'assistant', content: reply }];
-    saveToAdmin(sid, allMsgs).catch(() => {});
-
-    return NextResponse.json({ reply, assistant_text: reply, quote: quote || undefined, render_order_now: !!quote, sessionId: sid });
 
   } catch (e: any) {
-    if (e instanceof Error && e.name === 'AbortError') return NextResponse.json({ reply: "Taking longer than usual. Please try again.", error: true }, { status: 504 });
-    if (e instanceof AggregateError) { for (const err of e.errors) { if (err.name === 'AbortError') return NextResponse.json({ reply: "Taking longer than usual. Please try again.", error: true }, { status: 504 }); } }
+    // Timeout classification — keep AggregateError AbortError handling
+    const isTimeout =
+      (e instanceof Error && e.name === 'AbortError') ||
+      (e instanceof AggregateError && e.errors.some((err: any) => err?.name === 'AbortError' || err?.name === 'TimeoutError')) ||
+      (e instanceof Error && e.name === 'TimeoutError') ||
+      (typeof e?.message === 'string' && e.message.includes('timed out'));
+
+    if (isTimeout) {
+      return NextResponse.json({ reply: "Taking longer than usual. Please try again.", error: true, message: "Taking longer than usual. Please try again." }, { status: 504 });
+    }
     console.error('[Skyal Chat]', e?.message || e);
-    return NextResponse.json({ reply: "Couldn't process that. Try again or call 0803 500 3068.", error: true }, { status: 500 });
+    return NextResponse.json({ reply: "Couldn't process that. Please try again, or call 0803 500 3068.", error: true, message: "Couldn't process that. Please try again, or call 0803 500 3068." }, { status: 500 });
   }
 }

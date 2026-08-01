@@ -62,7 +62,7 @@ export default function ChatView({
   onOrderWithQuote,
 }: {
   onNavigate: (v: ViewId) => void;
-  onOrderWithQuote?: (quote: { price: number; summary?: string; breakdown?: Record<string, unknown> }) => void;
+  onOrderWithQuote?: (quote: { price: number; summary?: string; breakdown?: Record<string, unknown>; context?: string }) => void;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -71,6 +71,9 @@ export default function ChatView({
   const [sessionId, setSessionId] = useState<string | undefined>();
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Last customer query — passed to the order form so the customer's own
+  // words (what they want, what they agreed to pay) reach the order notes.
+  const lastUserQueryRef = useRef<string>("");
 
   useEffect(() => { setMsgs([{ id: "w", who: "support", text: WELCOME, time: now() }]); }, []);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [msgs, busy]);
@@ -78,6 +81,7 @@ export default function ChatView({
   const send = useCallback(async (text: string) => {
     const clean = text.trim();
     if ((!clean && !pendingImage) || busy) return;
+    lastUserQueryRef.current = clean || "(image attached)";
     const userMsg: Msg = { id: `u-${Date.now()}`, who: "customer", text: clean || "(image attached)", time: now(), image: pendingImage ?? undefined };
     const newMsgs = [...msgs, userMsg];
     setMsgs(newMsgs); setInput(""); const img = pendingImage; setPendingImage(null); setBusy(true);
@@ -88,8 +92,20 @@ export default function ChatView({
       if (sessionId) payload.sessionId = sessionId;
       if (img) payload.image_base64 = img;
 
-      const res = await fetch(API_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData?.error || `Chat failed (${res.status})`); }
+      // Client-side safety timeout: the server retries internally for up to
+      // ~60s, so give the fetch a generous 90s cap before giving up locally.
+      const res = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(90_000),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const err: any = new Error(errData?.message || errData?.error || `Chat failed (${res.status})`);
+        err.status = res.status;
+        throw err;
+      }
       const data = await res.json();
       if (data.sessionId) setSessionId(data.sessionId);
       const replyText = data.assistant_text || data.reply || "(no response)";
@@ -97,7 +113,18 @@ export default function ChatView({
 
       setMsgs(prev => [...prev, { id: `s-${Date.now()}`, who: "support", text: replyText, time: now(), quote }]);
     } catch (err: any) {
-      setMsgs(prev => [...prev, { id: `e-${Date.now()}`, who: "support", text: err.message || "Connection dropped. Try again.", time: now(), error: true }]);
+      const status = err?.status;
+      const timedOut =
+        err?.name === 'TimeoutError' ||
+        err?.name === 'AbortError' ||
+        /timed out|aborted|taking longer than usual/i.test(err?.message || '');
+      const text =
+        status === 504 || status === 503 || status === 429
+          ? "The assistant is taking a bit longer than usual right now. Please try again in a moment."
+          : timedOut
+            ? "The assistant is taking too long to respond. Please try again."
+            : (err.message || "Connection dropped. Try again.");
+      setMsgs(prev => [...prev, { id: `e-${Date.now()}`, who: "support", text, time: now(), error: true }]);
     } finally { setBusy(false); }
   }, [busy, msgs, pendingImage, sessionId]);
 
@@ -173,7 +200,7 @@ export default function ChatView({
                     )}
                     {m.quote.renderOrderNow && (
                       <button
-                        onClick={() => onOrderWithQuote ? onOrderWithQuote(m.quote!) : onNavigate("order")}
+                        onClick={() => onOrderWithQuote ? onOrderWithQuote({ ...m.quote!, context: lastUserQueryRef.current }) : onNavigate("order")}
                         className="mt-2 inline-flex items-center gap-1 text-xs bg-laser text-white px-3 py-1.5 hover:bg-ink transition-colors"
                       >
                         Order Now <ArrowRight className="w-3 h-3" />

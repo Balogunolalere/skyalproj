@@ -46,7 +46,7 @@ function hashToView(): ViewId {
 
 export default function Home() {
   const [view, setView] = useState<ViewId>("home");
-  const [chatQuote, setChatQuote] = useState<{ price: number; summary?: string; breakdown?: Record<string, unknown> } | null>(null);
+  const [chatQuote, setChatQuote] = useState<{ price: number; summary?: string; breakdown?: Record<string, unknown>; context?: string } | null>(null);
 
   // Sync from hash on mount + on hashchange
   useEffect(() => {
@@ -66,7 +66,7 @@ export default function Home() {
   }, []);
 
   // Navigate to order with quote data from chat
-  const navigateToOrderWithQuote = useCallback((quote: { price: number; summary?: string; breakdown?: Record<string, unknown> }) => {
+  const navigateToOrderWithQuote = useCallback((quote: { price: number; summary?: string; breakdown?: Record<string, unknown>; context?: string }) => {
     setChatQuote(quote);
     navigate("order");
   }, [navigate]);
