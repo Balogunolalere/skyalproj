@@ -107,13 +107,13 @@ export default function OrderCompletePage() {
           <p className="text-sm text-thread mb-6">{error}</p>
           <div className="flex gap-3 justify-center">
             <button
-              onClick={() => router.replace('/order')}
+              onClick={() => router.replace('/#order')}
               className="px-6 py-3 bg-laser text-white rounded hover:bg-ink transition-colors"
             >
               Try Again
             </button>
             <button
-              onClick={() => router.replace('/track')}
+              onClick={() => router.replace('/#track')}
               className="px-6 py-3 border border-ink/25 text-ink rounded hover:bg-ink hover:text-bone transition-colors"
             >
               Track Order
@@ -217,13 +217,13 @@ export default function OrderCompletePage() {
         
         <div className="flex gap-3 justify-center flex-wrap">
           <button
-            onClick={() => router.replace('/order')}
+            onClick={() => router.replace('/#order')}
             className="px-6 py-3 bg-laser text-white rounded hover:bg-ink transition-colors"
           >
             Place Another Order
           </button>
           <button
-            onClick={() => router.replace('/track')}
+            onClick={() => router.replace('/#track')}
             className="px-6 py-3 border border-ink/25 text-ink rounded hover:bg-ink hover:text-bone transition-colors flex items-center gap-2"
           >
             Track Order

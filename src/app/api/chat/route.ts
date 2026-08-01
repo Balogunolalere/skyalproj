@@ -118,14 +118,14 @@ function cacheGet(k: string): string | null { const e = cache.get(k); if (!e || 
 function cacheSet(k: string, v: string) { if (cache.size >= MAX_CACHE) { const f = cache.keys().next(); if (!f.done) cache.delete(f.value); } cache.set(k, { reply: v, ts: Date.now() }); }
 
 // ── Save to admin backend (fire-and-forget, best-effort) ──
-async function saveToAdmin(sessionId: string, messages: Array<{ role: string; content: string }>) {
+async function saveToAdmin(sessionId: string, messages: Array<{ role: string; content: string }>, customerPhone?: string) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 5000);
   try {
     await fetch(`${ADMIN_API_URL}/api/skyal/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: messages[messages.length - 1]?.content || '', brand: "skyal", mode: "live", history: messages.slice(0, -1), sessionId }),
+      body: JSON.stringify({ message: messages[messages.length - 1]?.content || '', brand: "skyal", mode: "live", history: messages.slice(0, -1), sessionId, persist_only: true, customerPhone }),
       signal: controller.signal,
     });
   } catch {
@@ -178,6 +178,7 @@ export async function POST(req: NextRequest) {
       history,
       brand = 'skyal',
       sessionId: incomingSessionId,
+      customerPhone,
     } = body as Record<string, unknown>;
 
     // Support both input formats
@@ -355,7 +356,7 @@ export async function POST(req: NextRequest) {
       { role: 'user' as const, content: message },
       { role: 'assistant' as const, content: assistantText },
     ];
-    saveToAdmin(sessionId, allMsgs).catch(() => {}); // Explicitly swallow — must not throw
+    saveToAdmin(sessionId, allMsgs, typeof customerPhone === 'string' ? customerPhone : undefined).catch(() => {}); // Explicitly swallow — must not throw
 
     return NextResponse.json({
       reply: assistantText,

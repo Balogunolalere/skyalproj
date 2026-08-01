@@ -91,6 +91,14 @@ export default function ChatView({
       const payload: Record<string, unknown> = { message: clean, brand: "skyal", mode: "live", history };
       if (sessionId) payload.sessionId = sessionId;
       if (img) payload.image_base64 = img;
+      // Attach the customer's phone (if known) so admin chat sessions link to the customer
+      try {
+        const stored = localStorage.getItem("skyal_customer");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed?.phone) payload.customerPhone = parsed.phone;
+        }
+      } catch { /* ignore storage errors */ }
 
       // Client-side safety timeout: the server retries internally for up to
       // ~60s, so give the fetch a generous 90s cap before giving up locally.
