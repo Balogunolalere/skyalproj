@@ -4,10 +4,13 @@ import {
   retryWithBackoff,
   parseEnvInt,
   generateSessionId,
-  extractQuote,
+  parseSpecsBlock,
   cleanAssistantText,
   sanitizeHistory,
   isInjectionAttempt,
+  SKYAL_SYSTEM_PROMPT,
+  type ChatSpecs,
+  type ChatResponse,
 } from "@/lib/chat";
 
 export const runtime = "nodejs";
@@ -15,82 +18,6 @@ export const runtime = "nodejs";
 // killed as 504s. Hobby caps at 60s; on Pro you can raise to 300 and bump
 // TOTAL_TIMEOUT.
 export const maxDuration = 60;
-
-// ═══════════════════════════════════════════════════════════════════════
-// COMPLETE SKYAL SERVICE CATALOG — Accurate pricing for AI quotes
-// ═══════════════════════════════════════════════════════════════════════
-
-export const SKYAL_SYSTEM_PROMPT = `You are Skyal's AI Assistant — the friendly, knowledgeable voice of Skyal Laser Services, a precision laser cutting business in Ogba, Ikeja, Lagos, Nigeria.
-
-# YOUR IDENTITY
-- You represent Skyal Laser Services (sister brand to Paberin Creations)
-- You help with laser cutting, engraving, sheet cutting, signage, and cake toppers
-- Your tone: warm, professional, Nigerian-friendly. Use "ma" / "sir" respectfully.
-- Be honest about limitations. When you can't do something, explain why.
-
-# SERVICES & PRICING (All amounts in Nigerian Naira ₦ — NO VAT)
-
-## FABRIC LASER CUTTING (customer brings fabric — 5 working days, express 48h +50%)
-Sleeves (pair): ₦20,000 | Full Buba: ₦35,000 | One Layer of Buba: ₦40,000 | Bottom of Wrapper: ₦40,000 | Skirt: ₦50,000 | Full Blouse + Skirt: ₦70,000 | Full Buba + Wrapper: ₦75,000 | Boubou: ₦45,000 | Sleeves + Edge of Wrapper: ₦50,000 | Sleeves + Buba Front/Back: ₦30,000 | Custom Fabric Cutting: ₦10,000/section (min ₦20K) | Fabric Per Yard: ₦20,000/yard | Complex Custom Gown: ₦100K-₦200K (no express, 1-2 weeks)
-
-## ENGRAVING (customer brings item — NO EXPRESS, minimum 48 hours)
-Phone Back: ₦5,000 | Jewelry: ₦6,000 | Leather: ₦17,500 | Wood: ₦7,500 | Small Items (stirrers, sticks): ₦1,500 | Curved Surface: ₦15,000 | Detective Badge: ₦2,500 (no express) | Necklace: ₦7,000
-
-## SHEET CUTTING
-4ft×4ft: ₦40,000 (48h express +50%) | 8ft×4ft: ₦70,000 (no express, external partner) | Custom Sheet: ₦55,000 (48h express +50%) | Acrylic Stick Cutting: ₦100/piece (min ₦5K)
-
-## CAKE TOPPERS & SIGNAGE
-Acrylic Cake Topper: ₦15,000 | Custom Topper: ₦25,000 (5-7 days, no express) | Small Signage: ₦15K-₦25K | Custom Signage: ₦30K-₦70K
-
-## ADD-ONS: Stoning Board ₦20,000
-
-# KEY RULES
-- Express = +50% surcharge. 48 hours minimum (NOT next day).
-- Engraving: NO express. Minimum 48 hours. We don't rush engraving.
-- Metal cutting: ALWAYS external partner. 10 working days. NO express.
-- Lead time counts from PAYMENT confirmation.
-- Full payment before production. No deposit/balance.
-- NO VAT. Machine bed: 900mm×600mm in-house. Larger → external partner.
-- Tolerance ±1mm. 99.2% on-time. Quality guarantee: recut free if not right.
-- 40+ materials, each with tuned power/speed/frequency profiles.
-
-# DELIVERY
-FREE pickup (Ogba, Ikeja, Lagos) | Lagos delivery: ₦1,500-₦3,000 | Nationwide waybill: ₦3,500
-
-# HANDLING AMBIGUOUS QUERIES
-- "I need something for my wedding" → Ask: fabric? cake topper? signage?
-- "How much for cutting?" → Ask: what material? what item? how many?
-- "Price?" → Overview price ranges, ask specifics
-- Pidgin OK: "abeg", "e go cost", "na how much", "shey you fit"
-- "Last price?" → Explain fixed catalog prices politely
-- Image only → Acknowledge, ask what they want done
-- Just "Ok"/"Yes" → Confirm prior quote, guide to order
-
-# RESPONSE FORMAT
-Answer conversationally first. If a COMPLETE quote is ready, append EXACTLY:
-
-[QUOTE]
-{
-  "service_type": "<service_type_key>",
-  "service_label": "<human readable name>",
-  "quantity": <number>,
-  "sla": "Standard" or "Express",
-  "unit_price": <base_price_per_unit_in_naira_BEFORE_surcharges>,
-  "subtotal": <quantity × unit_price>,
-  "express_surcharge": <0_or_surcharge_amount>,
-  "add_ons_total": <0_or_total_of_add_ons>,
-  "discount": <0_or_discount_amount>,
-  "delivery_fee": <0_or_fee>,
-  "total": <subtotal + express_surcharge + add_ons_total + delivery_fee − discount>,
-  "original_price": <optional_pre_discount_price>,
-  "lead_time": "<human readable>",
-  "notes": "<any caveats or important info>"
-}
-[/QUOTE]
-
-IMPORTANT: the [QUOTE] JSON must be plain text — NEVER wrap it in markdown code fences (triple backticks), NEVER add trailing commas, and make sure "total" matches the sum of its components exactly.
-
-If info is missing, NEVER output [QUOTE] — ask clarifying questions instead.`;
 
 // ════════════════════════════════════════════════════════════════
 // Configuration — validated env values; invalid ones fall back to defaults
@@ -161,6 +88,155 @@ function isRetryableError(error: unknown): boolean {
 }
 
 // ════════════════════════════════════════════════════════════════
+// ENGINE PRICING (spec: the AI never prices)
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Ask the admin pricing engine for the exact price of an extracted spec.
+ * Same endpoint the order form uses — one number everywhere.
+ */
+async function callAdminQuote(specs: ChatSpecs, customerPhone?: string): Promise<{ quote: NonNullable<ChatResponse['quote']>; availability: unknown }> {
+  const payload = {
+    brand: 'SKYAL',
+    serviceType: specs.service_type,
+    quantity: specs.quantity,
+    sla: specs.sla || 'Standard',
+    deliveryMethod: specs.delivery,
+    deliveryAddress: specs.delivery === 'LOCAL_DELIVERY' ? specs.delivery_address : undefined,
+    ...(customerPhone ? { customerPhone } : {}),
+  };
+  const res = await retryWithBackoff(
+    async (remaining) => {
+      // Each attempt gets a FRESH AbortController — an aborted controller
+      // stays aborted and would poison every subsequent attempt.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(
+        () => controller.abort(),
+        Math.max(500, Math.min(15000, remaining))
+      );
+      try {
+        return await fetch(`${ADMIN_API_URL}/api/services/quote`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+          cache: "no-store",
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    },
+    { maxRetries: 2, baseDelay: 500, budgetMs: 20000, shouldRetry: isRetryableError }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Pricing engine error (${res.status})`);
+  }
+  const json = await res.json().catch(() => null);
+  const data = json?.data;
+  if (!data || typeof data.quoteNaira !== 'number') {
+    throw new Error('Pricing engine returned no quote');
+  }
+  const breakdown = data.breakdown || {};
+  const quote: NonNullable<ChatResponse['quote']> = {
+    price: data.quoteNaira,
+    breakdown,
+    summary: `${breakdown.serviceLabel || specs.service_type}: ${data.quoteNaira.toLocaleString('en-NG')} naira${breakdown.leadTime ? ` · ${breakdown.leadTime}` : ''}`,
+  };
+  return { quote, availability: data.availability ?? null };
+}
+
+/** Human-readable one-liner appended to the assistant text (ENGINE price). */
+function priceLine(quote: NonNullable<ChatResponse['quote']>): string {
+  const b = quote.breakdown || {};
+  const parts: string[] = [`₦${quote.price.toLocaleString('en-NG')}`];
+  if (b.quantity && b.serviceLabel) parts.unshift(`${b.quantity} × ${b.serviceLabel}`);
+  if (b.deliveryFee) parts.push(`delivery ₦${(b.deliveryFee as number).toLocaleString('en-NG')}`);
+  if (b.discount) parts.push(`discount −₦${(b.discount as number).toLocaleString('en-NG')}`);
+  if (b.leadTime) parts.push(b.leadTime as string);
+  return `\n\n💰 Your price: ${parts.join(' · ')}. Review and pay to confirm your order.`;
+}
+
+/** Best-effort: open saved quote snapshots for the phone (first turn only).
+ *  The phone is validated defensively (the admin enforces 7–15 digits) and
+ *  rows are mapped to a minimal safe shape — `requestJson` (which can embed
+ *  customer PII) is never passed through to the client. */
+async function fetchOpenQuotes(customerPhone: string): Promise<ChatResponse['openQuotes']> {
+  const digits = customerPhone.replace(/\D/g, '');
+  if (digits.length < 7 || digits.length > 15) return undefined;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`${ADMIN_API_URL}/api/quotes?phone=${encodeURIComponent(customerPhone)}`, {
+      signal: controller.signal,
+      cache: 'no-store',
+    }).finally(() => clearTimeout(timeoutId));
+    if (!res.ok) return undefined;
+    const json = await res.json().catch(() => null);
+    if (!Array.isArray(json?.data)) return undefined;
+    return json.data.map((q: any) => ({
+      id: q?.id,
+      quoteNumber: q?.quoteNumber,
+      totalAmount: q?.totalAmount,
+      discount: q?.discount,
+      deliveryFee: q?.deliveryFee,
+      serviceType: q?.serviceType,
+      status: q?.status,
+      expiresAt: q?.expiresAt,
+      createdAt: q?.createdAt,
+    }));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the assistant's raw text into the response extras: engine quote for
+ * catalog jobs, custom handoff for bespoke jobs, open saved quotes on the
+ * first turn. Shared by the fresh path and the cached path.
+ */
+async function resolveExtras(
+  rawAssistantText: string,
+  customerPhone: string | undefined,
+  isFirstTurn: boolean
+): Promise<{ assistantText: string; quote: ChatResponse['quote']; custom: ChatResponse['custom']; openQuotes: ChatResponse['openQuotes']; renderOrderNow: boolean }> {
+  const specs = parseSpecsBlock(rawAssistantText);
+  const baseText = cleanAssistantText(rawAssistantText);
+
+  let assistantText = baseText;
+  let quote: ChatResponse['quote'] | undefined;
+  let custom: ChatResponse['custom'] | undefined;
+
+  if (specs?.service_type) {
+    // Tier 1 — catalog job: the ENGINE sets the price, never the model.
+    try {
+      const engine = await callAdminQuote(specs, customerPhone);
+      quote = engine.quote;
+      assistantText = `${baseText}${priceLine(engine.quote)}`;
+    } catch (err: any) {
+      console.warn('[Skyal Chat] Engine quote failed:', err?.message);
+      assistantText = `${baseText}\n\nI couldn't confirm the exact price just now — please try again, or place your order and we'll confirm pricing.`;
+    }
+  } else if (specs?.custom_description) {
+    // Tier 2 — custom job: hand off to the provisional-order flow.
+    custom = {
+      description: specs.custom_description,
+      material: specs.material,
+      quantity: specs.quantity,
+      sla: specs.sla,
+    };
+    assistantText = `${baseText}\n\nI've noted your custom job. Tap "Place custom order" to send it to our team — we'll confirm the price right away.`;
+  }
+
+  let openQuotes: ChatResponse['openQuotes'];
+  if (isFirstTurn && typeof customerPhone === 'string' && customerPhone.trim()) {
+    openQuotes = await fetchOpenQuotes(customerPhone.trim());
+  }
+
+  return { assistantText, quote, custom, openQuotes, renderOrderNow: quote !== undefined };
+}
+
+// ════════════════════════════════════════════════════════════════
 // MAIN HANDLER
 // ════════════════════════════════════════════════════════════════
 
@@ -181,15 +257,45 @@ export async function POST(req: NextRequest) {
       customerPhone,
     } = body as Record<string, unknown>;
 
-    // Support both input formats
+    // ── Normalize the two input formats into (message, contextTurns) ──
+    // The current user turn: an explicit `message` wins; otherwise the last
+    // user entry in the `messages` array is treated as the current turn.
+    const providedMessages = Array.isArray(body.messages) ? (body.messages as Array<Record<string, unknown>>) : [];
+    const providedHistory = Array.isArray(history) ? (history as Array<Record<string, unknown>>) : [];
     let message = typeof rawMessage === 'string' ? rawMessage.trim() : '';
-    let messages = Array.isArray(body.messages) ? body.messages : [];
-    if (!message && messages.length > 0) {
-      const last = [...messages].reverse().find((m: any) => m.role === 'user');
-      message = typeof last?.content === 'string' ? last.content : '';
+    let currentUserIdx = -1;
+    if (!message) {
+      for (let idx = providedMessages.length - 1; idx >= 0; idx--) {
+        const m = providedMessages[idx] as any;
+        if (m?.role === 'user' && typeof m?.content === 'string' && m.content.trim()) {
+          message = m.content.trim();
+          currentUserIdx = idx;
+          break;
+        }
+      }
     }
-    if (messages.length === 0 && Array.isArray(history) && history.length > 0) messages = [...history, { role: 'user', content: message }];
-    if (messages.length === 0 && message) messages = [{ role: 'user', content: message }];
+
+    // Conversation context: explicit `history` is canonical; otherwise every
+    // `messages` entry before the current user turn becomes the context.
+    // Follow-up messages ALWAYS thread the prior user+assistant turns here —
+    // sessionId is only echoed for the admin save, never used to reconstruct
+    // conversation context.
+    let contextTurns: unknown[] = [];
+    if (providedHistory.length > 0) {
+      contextTurns = providedHistory;
+    } else if (providedMessages.length > 0) {
+      contextTurns = currentUserIdx >= 0 ? providedMessages.slice(0, currentUserIdx) : providedMessages;
+    }
+
+    // Clients sometimes append the current message to the context by mistake
+    // — drop a trailing user turn that duplicates it so the turn is not sent
+    // to the model twice.
+    if (message && contextTurns.length > 0) {
+      const last = contextTurns[contextTurns.length - 1] as any;
+      if (last?.role === 'user' && typeof last.content === 'string' && last.content.trim() === message) {
+        contextTurns = contextTurns.slice(0, -1);
+      }
+    }
 
     // ── Input validation ──
     if (typeof message !== 'string' || message.trim() === '') {
@@ -208,14 +314,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Sanitize history: max 50 turns, only user/assistant, strip empty/long content.
-    // `history` is the canonical source; when the caller used the `messages`
-    // array format, the current message is the last user entry, so the rest of
-    // the array becomes the conversation context.
-    const historySource = Array.isArray(history)
-      ? history
-      : messages.slice(0, -1).filter((m: any) => m?.role !== 'system');
-    const sanitizedHistory = sanitizeHistory(historySource);
+    // Sanitize the threaded context: max 50 turns, only user/assistant,
+    // strip empty/long content. Follow-up messages always carry the prior
+    // user+assistant turns — never rely on sessionId alone for context.
+    const sanitizedHistory = sanitizeHistory(contextTurns);
 
     // Reject messages that look like prompt injection / system override attempts.
     // History is fully client-controlled, so it must be scanned too — an attacker
@@ -270,9 +372,22 @@ export async function POST(req: NextRequest) {
     const ck = cacheKey(agnesMsgs);
     const cached = cacheGet(ck);
     if (cached) {
-      const q = extractQuote(cached);
-      const reply = cleanAssistantText(cached);
-      return NextResponse.json({ reply, assistant_text: reply, quote: q, render_order_now: !!q, sessionId, cached: true });
+      const custPhoneVal =
+        typeof customerPhone === 'string' && customerPhone.replace(/\D/g, '').length >= 7
+          ? customerPhone
+          : undefined;
+      const extras = await resolveExtras(cached, custPhoneVal, sanitizedHistory.length === 0);
+      return NextResponse.json({
+        reply: extras.assistantText,
+        assistant_text: extras.assistantText,
+        quote: extras.quote,
+        custom: extras.custom,
+        openQuotes: extras.openQuotes,
+        render_order_now: extras.renderOrderNow,
+        sessionId,
+        cached: true,
+        error: undefined,
+      });
     }
 
     // ── Call Agnes 2.0 Flash with per-attempt timeout + retry/backoff ──
@@ -345,24 +460,33 @@ export async function POST(req: NextRequest) {
 
     // ── Parse response ──
     const rawAssistantText = data.choices?.[0]?.message?.content || '';
-    const quote = extractQuote(rawAssistantText);
-    const assistantText = cleanAssistantText(rawAssistantText);
 
-    if (ck) cacheSet(ck, rawAssistantText);
+    if (ck && rawAssistantText) cacheSet(ck, rawAssistantText);
+
+    const customerPhoneVal = (() => {
+      if (typeof customerPhone !== 'string') return undefined;
+      const digits = customerPhone.replace(/\D/g, '');
+      // Defensive: only phones that look real (7–15 digits) may be sent to
+      // the admin engine / quotes endpoints — never arbitrary strings.
+      return digits.length >= 7 && digits.length <= 15 ? customerPhone : undefined;
+    })();
+    const extras = await resolveExtras(rawAssistantText, customerPhoneVal, sanitizedHistory.length === 0);
 
     // ── Fire-and-forget: save session to admin backend for admin viewing ──
     const allMsgs = [
       ...sanitizedHistory,
       { role: 'user' as const, content: message },
-      { role: 'assistant' as const, content: assistantText },
+      { role: 'assistant' as const, content: extras.assistantText },
     ];
-    saveToAdmin(sessionId, allMsgs, typeof customerPhone === 'string' ? customerPhone : undefined).catch(() => {}); // Explicitly swallow — must not throw
+    saveToAdmin(sessionId, allMsgs, customerPhoneVal).catch(() => {}); // Explicitly swallow — must not throw
 
     return NextResponse.json({
-      reply: assistantText,
-      assistant_text: assistantText,
-      quote: quote || undefined,
-      render_order_now: !!quote,
+      reply: extras.assistantText,
+      assistant_text: extras.assistantText,
+      quote: extras.quote,
+      custom: extras.custom,
+      openQuotes: extras.openQuotes,
+      render_order_now: extras.renderOrderNow,
       sessionId,
       latency_ms: fetchLatency,
       error: undefined,

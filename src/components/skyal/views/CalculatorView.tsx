@@ -61,8 +61,11 @@ function buildDeliveryBody(opt: DeliveryOption): Record<string, unknown> {
 
 export default function CalculatorView({
   onNavigate,
+  onCustomQuote,
 }: {
   onNavigate: (v: ViewId) => void;
+  /** Open the order form in custom mode ("Something else / custom job"). */
+  onCustomQuote?: () => void;
 }) {
   const [services, setServices] = useState<Service[]>([]);
   const [servicesLoading, setServicesLoading] = useState(true);
@@ -339,6 +342,18 @@ export default function CalculatorView({
                 <p className="text-sm">{quoteError}</p>
               </div>
             )}
+
+            <p className="text-xs text-thread mt-4">
+              Can&apos;t find your job?{" "}
+              <button
+                type="button"
+                onClick={() => (onCustomQuote ? onCustomQuote() : onNavigate("order"))}
+                className="text-laser hover:text-ink underline underline-offset-2 font-medium"
+              >
+                Request a custom quote
+              </button>{" "}
+              — cut my jeans, engrave wood, anything bespoke.
+            </p>
           </form>
         </div>
 

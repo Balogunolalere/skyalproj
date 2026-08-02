@@ -13,8 +13,6 @@ interface OrderData {
   orderNumber: string;
   brand: string;
   customerName: string;
-  customerPhone: string;
-  customerEmail: string;
   serviceLabel: string;
   serviceType: string;
   quantity: number;

@@ -1,8 +1,7 @@
 import { describe, expect, test, vi, afterEach } from 'vitest'
 import {
-  parseQuoteBlock,
-  extractPriceFromText,
-  extractQuote,
+  parseSpecsBlock,
+  parseLenientJson,
   cleanAssistantText,
   generateSessionId,
   isInjectionAttempt,
@@ -10,6 +9,7 @@ import {
   RateLimiter,
   retryWithBackoff,
   parseEnvInt,
+  SKYAL_SYSTEM_PROMPT,
 } from '@/lib/chat'
 
 // These tests exercise the REAL production functions from src/lib/chat.ts —
@@ -17,358 +17,230 @@ import {
 // codebase with Skyal branding).
 
 // ═══════════════════════════════════════════════════════════════════════
-// TESTS: parseQuoteBlock (structured [QUOTE] extraction)
+// TESTS: parseSpecsBlock (structured [SPECS] extraction)
 // ═══════════════════════════════════════════════════════════════════════
 
-describe('parseQuoteBlock — structured [QUOTE] extraction', () => {
-  test('should extract quote from [QUOTE] block with full breakdown', () => {
-    const text = `Here's your quote for the buba:
-[QUOTE]
+describe('parseSpecsBlock — structured [SPECS] extraction', () => {
+  test('should extract specs with a catalog service_type', () => {
+    const text = `Here's what I need for your buba:
+[SPECS]
 {
   "service_type": "fabric_buba",
-  "service_label": "Full Buba",
   "quantity": 3,
   "sla": "Standard",
-  "unit_price": 35000,
-  "subtotal": 105000,
-  "express_surcharge": 0,
-  "delivery_fee": 0,
-  "total": 105000,
-  "lead_time": "5 working days",
-  "notes": "Customer brings fabric"
+  "delivery": "PICKUP",
+  "needs_design_upload": true
 }
-[/QUOTE]
-Let me know if you'd like to proceed!`
-
-    const result = parseQuoteBlock(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(105000)
-    expect(result!.breakdown).toBeDefined()
-    expect(result!.breakdown!.serviceLabel).toBe('Full Buba')
-    expect(result!.breakdown!.serviceType).toBe('fabric_buba')
-    expect(result!.breakdown!.sla).toBe('Standard')
-    expect(result!.breakdown!.leadTime).toBe('5 working days')
-    expect(result!.breakdown!.notes).toBe('Customer brings fabric')
-    expect(result!.breakdown!.quantity).toBe(3)
-    expect(result!.breakdown!.basePrice).toBe(35000)
-    expect(result!.breakdown!.finalPriceNaira).toBe(105000)
+[/SPECS]`
+    const specs = parseSpecsBlock(text)
+    expect(specs).toBeDefined()
+    expect(specs!.service_type).toBe('fabric_buba')
+    expect(specs!.quantity).toBe(3)
+    expect(specs!.sla).toBe('Standard')
+    expect(specs!.delivery).toBe('PICKUP')
+    expect(specs!.needs_design_upload).toBe(true)
   })
 
-  test('should extract quote with express surcharge', () => {
-    const text = `Express order:
-[QUOTE]
+  test('should extract custom jobs with service_type null', () => {
+    const text = `I'd like to cut my jeans:
+[SPECS]
 {
-  "service_type": "fabric_buba_wrapper",
-  "service_label": "Full Buba + Full Wrapper",
-  "quantity": 1,
-  "sla": "Express",
-  "unit_price": 75000,
-  "subtotal": 75000,
-  "express_surcharge": 37500,
-  "delivery_fee": 2500,
-  "total": 115000,
-  "lead_time": "48 hours minimum",
-  "notes": "Express +50% surcharge applied"
+  "service_type": null,
+  "custom_description": "Cut my jeans into a pattern",
+  "material": "denim",
+  "quantity": 1
 }
-[/QUOTE]`
-
-    const result = parseQuoteBlock(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(115000)
-    expect(result!.breakdown!.expressSurcharge).toBe(37500)
-    expect(result!.breakdown!.sla).toBe('Express')
+[/SPECS]`
+    const specs = parseSpecsBlock(text)
+    expect(specs).toBeDefined()
+    expect(specs!.service_type).toBeNull()
+    expect(specs!.custom_description).toBe('Cut my jeans into a pattern')
+    expect(specs!.material).toBe('denim')
+    expect(specs!.quantity).toBe(1)
   })
 
-  test('should return undefined when no [QUOTE] block present', () => {
-    const text = 'The price for 50 leather tags would be around ₦50,000.'
-    const result = parseQuoteBlock(text)
-    expect(result).toBeUndefined()
+  test('should return undefined when no [SPECS] block present', () => {
+    expect(parseSpecsBlock('Just a friendly chat, no specs here.')).toBeUndefined()
   })
 
-  test('should return undefined for malformed [QUOTE] JSON', () => {
-    const text = `[QUOTE]
-{ invalid json here }
-[/QUOTE]`
-    const result = parseQuoteBlock(text)
-    expect(result).toBeUndefined()
+  test('should return undefined for malformed [SPECS] JSON', () => {
+    expect(parseSpecsBlock('[SPECS] { not json [/SPECS]')).toBeUndefined()
   })
 
-  test('should return undefined when total is 0 or missing', () => {
-    expect(parseQuoteBlock(`[QUOTE]\n{ "service_label": "Test", "quantity": 1, "total": 0 }\n[/QUOTE]`)).toBeUndefined()
-    expect(parseQuoteBlock(`[QUOTE]\n{ "service_label": "Test", "quantity": 1 }\n[/QUOTE]`)).toBeUndefined()
-  })
-
-  test('should handle [QUOTE] block with extra whitespace and newlines', () => {
-    const text = `[QUOTE]
+  test('should handle [SPECS] block with extra whitespace and newlines', () => {
+    const specs = parseSpecsBlock(`Answer:
+[SPECS]
 
 {
-  "service_type": "acrylic_stick_cutting",
-  "service_label": "Acrylic Stick Cutting",
-  "quantity": 500,
-  "sla": "Standard",
-  "unit_price": 100,
-  "subtotal": 50000,
-  "express_surcharge": 0,
-  "delivery_fee": 0,
-  "total": 50000,
-  "lead_time": "2-3 working days"
+  "service_type":   "skyal_topper_acrylic",
+  "quantity":       2,
+  "sla":            "Express"
 }
 
-[/QUOTE]`
-    const result = parseQuoteBlock(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(50000)
-  })
-
-  test('should handle negative prices as invalid', () => {
-    const text = `[QUOTE]
-{ "service_label": "Test", "quantity": 1, "total": -5000 }
-[/QUOTE]`
-    const result = parseQuoteBlock(text)
-    expect(result).toBeUndefined()
-  })
-
-  test('should parse the FIRST [QUOTE] block when multiple exist', () => {
-    const text = `First quote:
-[QUOTE]
-{ "service_label": "Option A", "quantity": 1, "total": 50000, "lead_time": "5 days" }
-[/QUOTE]
-Second quote:
-[QUOTE]
-{ "service_label": "Option B", "quantity": 1, "total": 75000, "lead_time": "3 days" }
-[/QUOTE]`
-    const result = parseQuoteBlock(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(50000)
+[/SPECS]`)
+    expect(specs).toBeDefined()
+    expect(specs!.service_type).toBe('skyal_topper_acrylic')
+    expect(specs!.quantity).toBe(2)
+    expect(specs!.sla).toBe('Express')
   })
 
   test('should parse JSON wrapped in markdown code fences', () => {
-    const text = `Here you go:
-[QUOTE]
-\`\`\`json
-{
-  "service_label": "Leather Engraving",
-  "quantity": 2,
-  "unit_price": 17500,
-  "total": 35000,
-  "lead_time": "48 hours minimum"
-}
-\`\`\`
-[/QUOTE]`
-    const result = parseQuoteBlock(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(35000)
-    expect(result!.breakdown!.serviceLabel).toBe('Leather Engraving')
+    const specs = parseSpecsBlock('```json\n[SPECS]\n{"service_type":"engraving_wood","quantity":1}\n[/SPECS]\n```')
+    expect(specs).toBeDefined()
+    expect(specs!.service_type).toBe('engraving_wood')
   })
 
   test('should parse JSON with trailing commas', () => {
-    const text = `[QUOTE]
-{
-  "service_label": "Skirt",
-  "quantity": 1,
-  "unit_price": 50000,
-  "subtotal": 50000,
-  "express_surcharge": 0,
-  "delivery_fee": 0,
-  "total": 50000,
-  "lead_time": "5 working days",
-  "notes": "Customer brings fabric",
-}
-[/QUOTE]`
-    const result = parseQuoteBlock(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(50000)
+    const specs = parseSpecsBlock('[SPECS]\n{"service_type":"acrylic_stick_cutting","quantity":50,}\n[/SPECS]')
+    expect(specs).toBeDefined()
+    expect(specs!.quantity).toBe(50)
+  })
+
+  test('should default quantity to 1 when missing or invalid', () => {
+    expect(parseSpecsBlock('[SPECS] {"service_type":"x"} [/SPECS]')!.quantity).toBe(1)
+    expect(parseSpecsBlock('[SPECS] {"service_type":"x","quantity":0} [/SPECS]')!.quantity).toBe(1)
+    expect(parseSpecsBlock('[SPECS] {"service_type":"x","quantity":"abc"} [/SPECS]')!.quantity).toBe(1)
+  })
+
+  test('should normalize service_type to lowercase', () => {
+    const specs = parseSpecsBlock('[SPECS] {"service_type":"FABRIC_BUBA","quantity":1} [/SPECS]')
+    expect(specs!.service_type).toBe('fabric_buba')
+  })
+
+  test('should treat empty service_type as null (custom)', () => {
+    const specs = parseSpecsBlock('[SPECS] {"service_type":"","custom_description":"something","quantity":1} [/SPECS]')
+    expect(specs!.service_type).toBeNull()
   })
 
   test('should accept string-typed numbers from the model', () => {
-    const text = `[QUOTE]
-{ "service_label": "Phone Back Engraving", "quantity": "3", "unit_price": "5000", "total": "15000", "lead_time": "48 hours" }
-[/QUOTE]`
-    const result = parseQuoteBlock(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(15000)
-    expect(result!.breakdown!.quantity).toBe(3)
+    const specs = parseSpecsBlock('[SPECS] {"service_type":"x","quantity":"7"} [/SPECS]')
+    expect(specs!.quantity).toBe(7)
   })
 
-  test('should recompute a hallucinated total from its components', () => {
-    // Model arithmetic error: 3 × ₦35,000 reported as ₦8,035,003,068
-    const text = `[QUOTE]
-{ "service_label": "Full Buba", "quantity": 3, "unit_price": 35000, "subtotal": 105000, "express_surcharge": 0, "delivery_fee": 0, "total": 8035003068, "lead_time": "5 working days" }
-[/QUOTE]`
-    const result = parseQuoteBlock(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(105000)
+  test('should parse the FIRST [SPECS] block when multiple exist', () => {
+    const text = `[SPECS] {"service_type":"skyal_topper_acrylic","quantity":1} [/SPECS]
+[SPECS] {"service_type":"fabric_skirt","quantity":9} [/SPECS]`
+    const specs = parseSpecsBlock(text)
+    expect(specs!.service_type).toBe('skyal_topper_acrylic')
+    expect(specs!.quantity).toBe(1)
   })
 
-  test('should trust total when express surcharge is already folded into the unit price', () => {
-    // unit_price already includes the +50% express surcharge; total matches subtotal
-    const text = `[QUOTE]
-{ "service_label": "Full Buba", "quantity": 1, "unit_price": 52500, "subtotal": 52500, "express_surcharge": 17500, "delivery_fee": 0, "total": 52500, "lead_time": "48 hours" }
-[/QUOTE]`
-    const result = parseQuoteBlock(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(52500)
-  })
-
-  test('should read add_ons_total, discount, original_price and delivery_fee', () => {
-    const text = `[QUOTE]
-{ "service_label": "Full Buba", "quantity": 1, "unit_price": 35000, "subtotal": 35000, "express_surcharge": 0, "add_ons_total": 20000, "discount": 5000, "delivery_fee": 2500, "total": 52500, "original_price": 57500, "lead_time": "5 working days" }
-[/QUOTE]`
-    const result = parseQuoteBlock(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(52500)
-    expect(result!.breakdown!.addOnsTotal).toBe(20000)
-    expect(result!.breakdown!.discount).toBe(5000)
-    expect(result!.breakdown!.deliveryFee).toBe(2500)
-    expect(result!.original_price).toBe(57500)
+  test('should never carry a price — the model must not price', () => {
+    // Even if the model (wrongly) sneaks a price in, the parser ignores it:
+    // pricing is the engine's job.
+    const specs = parseSpecsBlock('[SPECS] {"service_type":"x","quantity":1,"total":35000,"unit_price":35000} [/SPECS]')
+    expect(specs).toBeDefined()
+    expect((specs as any).total).toBeUndefined()
+    expect((specs as any).unit_price).toBeUndefined()
   })
 })
 
 // ═══════════════════════════════════════════════════════════════════════
-// TESTS: extractPriceFromText (regex fallback — naira context required)
+// TESTS: regression — bugs found by the live black-box test run
 // ═══════════════════════════════════════════════════════════════════════
 
-describe('extractPriceFromText — regex fallback', () => {
-  test('should extract price with ₦ symbol', () => {
-    const result = extractPriceFromText('The price is ₦15,000 for the order.')
-    expect(result).toBeDefined()
-    expect(result?.price).toBe(15000)
+describe('regression — lowercase [specs] blocks (Bug 1)', () => {
+  test('should parse lowercase [specs]…[/specs] blocks', () => {
+    const specs = parseSpecsBlock('[specs]{"service_type":"fabric_buba","quantity":1}[/specs]')
+    expect(specs).toBeDefined()
+    expect(specs!.service_type).toBe('fabric_buba')
+    expect(specs!.quantity).toBe(1)
   })
 
-  test('should extract price with "naira" suffix', () => {
-    const result = extractPriceFromText('The cost is 25000 naira.')
-    expect(result).toBeDefined()
-    expect(result?.price).toBe(25000)
+  test('should parse mixed-case [SPECS] blocks', () => {
+    const specs = parseSpecsBlock('[Specs] {"service_type":"engraving_wood","quantity":2} [/sPECS]')
+    expect(specs).toBeDefined()
+    expect(specs!.service_type).toBe('engraving_wood')
   })
 
-  test('should extract price with N/NGN prefix', () => {
-    expect(extractPriceFromText('It will cost N20,000.')?.price).toBe(20000)
-    expect(extractPriceFromText('It will cost NGN 20,000.')?.price).toBe(20000)
-  })
-
-  test('should NOT treat a lowercase "n" prefix as naira', () => {
-    // "n15000" is not naira notation (serial/version numbers etc.)
-    expect(extractPriceFromText('Version n15000 of the design is fine')).toBeUndefined()
-  })
-
-  test('should extract price with comma formatting', () => {
-    const result = extractPriceFromText('Price: ₦50,000.00')
-    expect(result?.price).toBe(50000)
-  })
-
-  test('should extract the largest price when multiple prices exist', () => {
-    const result = extractPriceFromText('Options: ₦5,000 and ₦50,000 available')
-    expect(result?.price).toBe(50000)
-  })
-
-  test('should return undefined when no price is found', () => {
-    const result = extractPriceFromText('This is a regular message without any price.')
-    expect(result).toBeUndefined()
-  })
-
-  test('should handle large numbers correctly', () => {
-    const result = extractPriceFromText('Special order: ₦1,500,000')
-    expect(result?.price).toBe(1500000)
-  })
-
-  test('should handle prices with decimals', () => {
-    const result = extractPriceFromText('Price: ₦7,500.50')
-    expect(result?.price).toBe(7500.5)
-  })
-
-  test('should extract price from Nigerian-format numbers with naira context', () => {
-    const result = extractPriceFromText('I can do it for 15000 naira')
-    expect(result?.price).toBe(15000)
-  })
-
-  test('should NOT extract bare numbers without naira context', () => {
-    // Bare digits are ambiguous (dates, qty, refs)
-    expect(extractPriceFromText('I can do it for 15000')).toBeUndefined()
-    expect(extractPriceFromText('We have 5 working days and 3 sections')).toBeUndefined()
-  })
-
-  test('should handle ₦K shorthand', () => {
-    expect(extractPriceFromText('Custom cutting from ₦20K minimum')?.price).toBe(20000)
-    expect(extractPriceFromText('The topper is 25K naira')?.price).toBe(25000)
-  })
-
-  test('should handle price at end of sentence', () => {
-    const result = extractPriceFromText('The total comes to ₦35,000.')
-    expect(result?.price).toBe(35000)
-  })
-
-  test('should pick largest among scattered prices', () => {
-    const result = extractPriceFromText('Unit ₦500, bulk ₦450, total order ₦45,000')
-    expect(result?.price).toBe(45000)
-  })
-
-  test('should NOT match phone numbers as prices', () => {
-    expect(extractPriceFromText('Call us at 08035003068 for inquiries.')).toBeUndefined()
-    expect(extractPriceFromText('Call us at 0803 500 3068 for inquiries.')).toBeUndefined()
-  })
-
-  test('should ignore phone numbers when a real price is present', () => {
-    const result = extractPriceFromText('Call us on 0803 500 3068 or pay ₦20,000 for the order')
-    expect(result?.price).toBe(20000)
+  test('cleanAssistantText strips lowercase [specs] blocks too', () => {
+    expect(cleanAssistantText('[specs] {"service_type":"x"} [/specs]')).toBe('')
+    expect(cleanAssistantText('ok done. [specs] {"service_type":"x"} [/specs]')).toBe('ok done.')
   })
 })
 
-// ═══════════════════════════════════════════════════════════════════════
-// TESTS: extractQuote (combined pipeline)
-// ═══════════════════════════════════════════════════════════════════════
-
-describe('extractQuote — combined pipeline', () => {
-  test('should prefer [QUOTE] block over regex when both present', () => {
-    const text = `The total is ₦50,000 for this order.
-[QUOTE]
-{
-  "service_type": "acrylic_stick_cutting",
-  "service_label": "Acrylic Stick Cutting",
-  "quantity": 500,
-  "sla": "Standard",
-  "unit_price": 100,
-  "subtotal": 50000,
-  "express_surcharge": 0,
-  "delivery_fee": 0,
-  "total": 50000,
-  "lead_time": "2-3 working days",
-  "notes": "Min ₦5K order"
-}
-[/QUOTE]`
-
-    const result = extractQuote(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(50000)
-    expect(result!.breakdown).toBeDefined()
-    expect(result!.breakdown!.serviceLabel).toBe('Acrylic Stick Cutting')
+describe('regression — lenient JSON parsing (Bug 2)', () => {
+  test('should parse unquoted object keys and bare-word values', () => {
+    const specs = parseSpecsBlock('[SPECS] {service_type: fabric_buba, quantity: 1} [/SPECS]')
+    expect(specs).toBeDefined()
+    expect(specs!.service_type).toBe('fabric_buba')
+    expect(specs!.quantity).toBe(1)
   })
 
-  test('should fall back to regex when no [QUOTE] block', () => {
-    const text = 'The estimated cost for your tags is about ₦75,000 with delivery.'
-    const result = extractQuote(text)
-    expect(result).toBeDefined()
-    expect(result!.price).toBe(75000)
-    expect(result!.breakdown).toBeUndefined()
+  test('should parse unquoted keys with quoted values', () => {
+    const specs = parseSpecsBlock('[SPECS] {service_type: "fabric_wrapper", quantity: 4, sla: "Express"} [/SPECS]')
+    expect(specs!.service_type).toBe('fabric_wrapper')
+    expect(specs!.quantity).toBe(4)
+    expect(specs!.sla).toBe('Express')
   })
 
-  test('should return undefined for non-pricing text', () => {
-    const result = extractQuote('Hello, what materials do you work with?')
-    expect(result).toBeUndefined()
+  test('should parse single-quoted keys and values', () => {
+    const specs = parseSpecsBlock(`[SPECS] {'service_type': 'fabric_buba_layer', 'quantity': 3} [/SPECS]`)
+    expect(specs!.service_type).toBe('fabric_buba_layer')
+    expect(specs!.quantity).toBe(3)
   })
 
-  test('should return undefined for text with only phone numbers', () => {
-    const result = extractQuote('Call us at 0803 500 3068 or 0901 234 5678.')
-    expect(result).toBeUndefined()
+  test('should parse trailing commas with quoted keys', () => {
+    const specs = parseSpecsBlock('[SPECS] {"service_type": "fabric_skirt", "quantity": 2,} [/SPECS]')
+    expect(specs!.service_type).toBe('fabric_skirt')
+    expect(specs!.quantity).toBe(2)
   })
 
-  test('should handle empty text', () => {
-    const result = extractQuote('')
-    expect(result).toBeUndefined()
+  test('should keep JSON literals unquoted (true/false/null stay real)', () => {
+    const specs = parseSpecsBlock('[SPECS] {service_type: null, custom_description: restore my box, quantity: 1, needs_design_upload: true} [/SPECS]')
+    expect(specs).toBeDefined()
+    expect(specs!.service_type).toBeNull()
+    expect(specs!.custom_description).toBe('restore my box')
+    expect(specs!.needs_design_upload).toBe(true)
   })
 
-  test('should handle text with only whitespace', () => {
-    const result = extractQuote('   \n  \t  ')
-    expect(result).toBeUndefined()
+  test('should parse the exact black-box verify input', () => {
+    const specs = parseSpecsBlock('[SPECS] {service_type: fabric_buba, quantity: 1} [/SPECS]')
+    expect(specs).toBeDefined()
+    expect(specs!.service_type).toBe('fabric_buba')
+    expect(specs!.quantity).toBe(1)
+  })
+
+  test('parseLenientJson handles mixed deviations at once', () => {
+    const parsed = parseLenientJson(`{'service_type': fabric_buba, 'quantity': 1, 'sla': 'Express',}`)
+    expect(parsed).toEqual({ service_type: 'fabric_buba', quantity: 1, sla: 'Express' })
+  })
+
+  test('should NOT leak price/cost/amount keys into the parsed specs (no-price enforcement)', () => {
+    const specs = parseSpecsBlock(
+      '[specs] {service_type: fabric_buba, quantity: 2, price: 5000, cost: 3000, amount: 2500, total: 8000, unit_price: 4000, delivery_fee: 1000} [/specs]'
+    )
+    expect(specs).toBeDefined()
+    expect(specs!.service_type).toBe('fabric_buba')
+    expect(specs!.quantity).toBe(2)
+    for (const leaked of ['price', 'cost', 'amount', 'total', 'unit_price', 'delivery_fee']) {
+      expect((specs as any)[leaked]).toBeUndefined()
+    }
+  })
+
+  test('should return undefined for garbage inputs without throwing', () => {
+    const garbageInputs = [
+      '[SPECS] {not json at all [/SPECS]',
+      '[specs] {{{ [/specs]',
+      '[SPECS] {service_type: ,,, } [/SPECS]',
+      '[SPECS] {:"unbalanced [/SPECS]',
+      '[SPECS] {"a": "unterminated [/SPECS]',
+      '[SPECS] {service_type: } [/SPECS]',
+      '[SPECS] [1,2,3] [/SPECS]',
+      '[SPECS] hello [/SPECS]',
+      '[SPECS] {a: b: c} [/SPECS]',
+      '[SPECS] {"a": [1, 2} [/SPECS]',
+    ]
+    for (const garbage of garbageInputs) {
+      expect(() => parseSpecsBlock(garbage)).not.toThrow()
+      expect(parseSpecsBlock(garbage)).toBeUndefined()
+    }
+  })
+
+  test('parseLenientJson never throws on any garbage', () => {
+    for (const garbage of [undefined, null, 42, '', 'not json', '{"a": }', "'unterminated", '{{{{', '[]', '{}']) {
+      expect(() => parseLenientJson(garbage as any)).not.toThrow()
+    }
   })
 })
 
@@ -377,50 +249,35 @@ describe('extractQuote — combined pipeline', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('cleanAssistantText', () => {
-  test('should remove [QUOTE] blocks', () => {
-    const text = `Hello! Here's your quote:
-[QUOTE]
-{ "total": 50000 }
-[/QUOTE]
-Let me know if you'd like to proceed.`
-    const result = cleanAssistantText(text)
-    expect(result).not.toContain('[QUOTE]')
-    expect(result).not.toContain('"total"')
-    expect(result).toContain('Hello!')
-    expect(result).toContain('Let me know')
+  test('should remove [SPECS] blocks', () => {
+    const text = `Here's your order summary:
+[SPECS]
+{"service_type":"fabric_buba","quantity":1}
+[/SPECS]`
+    expect(cleanAssistantText(text)).toBe("Here's your order summary:")
   })
 
-  test('should handle text with no [QUOTE] block', () => {
-    const text = 'Just a regular response with no quote.'
-    expect(cleanAssistantText(text)).toBe(text)
+  test('should handle text with no [SPECS] block', () => {
+    expect(cleanAssistantText('Just a friendly chat.')).toBe('Just a friendly chat.')
   })
 
-  test('should handle multiple [QUOTE] blocks', () => {
-    const text = `[QUOTE]{ "total": 1 }[/QUOTE] middle [QUOTE]{ "total": 2 }[/QUOTE]`
-    const result = cleanAssistantText(text)
-    expect(result).not.toContain('[QUOTE]')
-    expect(result).toBe('middle')
+  test('should handle multiple [SPECS] blocks', () => {
+    const text = `a [SPECS] {} [/SPECS] b [SPECS] {} [/SPECS] c`
+    expect(cleanAssistantText(text)).toBe('a  b  c')
   })
 
-  test('should handle text that is ONLY a [QUOTE] block', () => {
-    const text = `[QUOTE]
-{ "total": 50000 }
-[/QUOTE]`
-    const result = cleanAssistantText(text)
-    expect(result).toBe('')
+  test('should handle text that is ONLY a [SPECS] block', () => {
+    expect(cleanAssistantText('[SPECS] {"service_type":"x","quantity":1} [/SPECS]')).toBe('')
   })
 
   test('should strip leftover markdown-fenced JSON', () => {
-    const text = `Here is the summary:
-\`\`\`json
-{ "total": 50000, "service_label": "X" }
-\`\`\`
-Anything else?`
-    const result = cleanAssistantText(text)
-    expect(result).not.toContain('```')
-    expect(result).not.toContain('"total"')
-    expect(result).toContain('Here is the summary')
-    expect(result).toContain('Anything else?')
+    const text = '```json\n{"service_type":"x"}\n```'
+    expect(cleanAssistantText(text)).toBe('')
+  })
+
+  test('should not strip engine price lines (they are not JSON blocks)', () => {
+    const text = "Great choice!\n\n💰 Your price: 2 × Full Buba · ₦70,000 · 5 working days. Review and pay to confirm your order."
+    expect(cleanAssistantText(text)).toBe(text)
   })
 })
 
@@ -656,5 +513,112 @@ describe('parseEnvInt', () => {
     expect(parseEnvInt('SKYAL_TEST_INT', 42)).toBe(42)
     vi.stubEnv('SKYAL_TEST_INT', '5.5')
     expect(parseEnvInt('SKYAL_TEST_INT', 42)).toBe(42)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// TESTS: system prompt contract — the AI never prices
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('system prompt contract — the AI never prices', () => {
+  test('prompt contains NO price tables or amounts', () => {
+    // The whole point: the model cannot quote from memory. If someone adds
+    // prices back into the prompt, this test fails on purpose.
+    const nairaLines = SKYAL_SYSTEM_PROMPT.split('\n').filter((l) => /₦|naira|NGN|\d{2,3},000/.test(l))
+    const priceInstruction = SKYAL_SYSTEM_PROMPT.match(/\[QUOTE\]/)
+    expect(nairaLines.length).toBe(0)
+    expect(priceInstruction).toBeNull()
+  })
+
+  test('prompt uses the [SPECS] contract', () => {
+    expect(SKYAL_SYSTEM_PROMPT).toContain('[SPECS]')
+    expect(SKYAL_SYSTEM_PROMPT).toContain('[/SPECS]')
+    expect(SKYAL_SYSTEM_PROMPT).toContain('service_type')
+  })
+
+  test('prompt forbids a [SPECS] block when details are missing', () => {
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/missing info.*NEVER output a \[SPECS\]/i)
+  })
+
+  test('prompt requires the model to ask for quantity and delivery', () => {
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/quantity/i)
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/delivery/i)
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/clarifying questions/i)
+  })
+
+  test('prompt covers the ambiguous-query patterns', () => {
+    for (const pattern of ['wedding/event', 'How much for cutting', 'What can you do', 'Pidgin', 'competitor']) {
+      expect(SKYAL_SYSTEM_PROMPT).toContain(pattern)
+    }
+  })
+})
+
+describe('system prompt contract — Nigerian context', () => {
+  test('prompt understands local garment terms', () => {
+    for (const term of ['aso-ebi', 'buba', 'wrapper', 'gele', 'boubou']) {
+      expect(SKYAL_SYSTEM_PROMPT).toContain(term)
+    }
+  })
+
+  test('prompt understands pidgin phrases', () => {
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/abeg|how far|e go cost/i)
+  })
+
+  test('prompt uses local measurements and events', () => {
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/yards/i)
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/owambe|burials/i)
+  })
+
+  test('prompt always responds in the customer language (Bug 3 — no Chinese/other replies)', () => {
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/never in any other language/i)
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/Nigerian English/i)
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/Pidgin/i)
+    // Explicitly covers the context-loss case that triggered foreign replies
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/context is lost/i)
+  })
+})
+
+describe('system prompt contract — SKYAL catalog keys', () => {
+  test('prompt lists the SKYAL service type keys (from the admin seed)', () => {
+    for (const key of [
+      // fabric
+      'fabric_sleeves', 'fabric_buba', 'fabric_buba_layer', 'fabric_wrapper', 'fabric_skirt',
+      'fabric_blouse_skirt', 'fabric_buba_wrapper', 'fabric_boubou', 'fabric_sleeves_wrapper',
+      'fabric_sleeves_buba', 'fabric_per_yard', 'fabric_custom', 'fabric_complex_gown',
+      // engraving
+      'engraving_phone', 'engraving_jewelry', 'engraving_leather', 'engraving_wood',
+      'engraving_small_item', 'engraving_curved', 'engraving_detective_badge', 'engraving_necklace',
+      'metal_engraving_inhouse',
+      // sheets / sticks / metal
+      'sheet_cutting_inhouse', 'sheet_cutting_oversize', 'sheet_cutting_8x4', 'sheet_cutting_custom',
+      'acrylic_stick_cutting', 'metal_cutting_external',
+      // toppers / add-on
+      'skyal_topper_acrylic', 'skyal_topper_custom', 'stoning_board',
+    ]) {
+      expect(SKYAL_SYSTEM_PROMPT).toContain(key)
+    }
+  })
+
+  test('prompt does NOT list Paberin-only keys', () => {
+    expect(SKYAL_SYSTEM_PROMPT).not.toContain('paberin_fabric_buba')
+    expect(SKYAL_SYSTEM_PROMPT).not.toContain('paberin_topper_acrylic')
+  })
+
+  test('prompt mentions metal cutting as external partner with no express', () => {
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/METAL CUTTING/i)
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/10 working days/i)
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/no express/i)
+  })
+})
+
+describe('system prompt contract — [SPECS] format', () => {
+  test('prompt defines every field the parser reads', () => {
+    for (const field of ['service_type', 'custom_description', 'material', 'quantity', 'sla', 'delivery', 'delivery_address', 'needs_design_upload']) {
+      expect(SKYAL_SYSTEM_PROMPT).toContain(field)
+    }
+  })
+
+  test('prompt forbids prices inside the [SPECS] block', () => {
+    expect(SKYAL_SYSTEM_PROMPT).toMatch(/NEVER include any price/i)
   })
 })

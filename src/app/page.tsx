@@ -5,6 +5,7 @@ import Nav from "@/components/skyal/Nav";
 import Footer from "@/components/skyal/Footer";
 import BedReadout from "@/components/skyal/BedReadout";
 import { type ViewId } from "@/components/skyal/data";
+import type { ChatSpecs } from "@/lib/chat";
 import HomeView from "@/components/skyal/views/HomeView";
 import OrderView from "@/components/skyal/views/OrderView";
 import TrackView from "@/components/skyal/views/TrackView";
@@ -44,9 +45,18 @@ function hashToView(): ViewId {
   return "home";
 }
 
+/** Handoff payload from the chat assistant (or calculator) to the order form.
+ *  `specs` carries the extracted [SPECS] block; `custom` forces custom mode
+ *  (no catalog match); `context` is the customer's own words. */
+export interface ChatHandoff {
+  specs?: ChatSpecs;
+  custom?: boolean;
+  context?: string;
+}
+
 export default function Home() {
   const [view, setView] = useState<ViewId>("home");
-  const [chatQuote, setChatQuote] = useState<{ price: number; summary?: string; breakdown?: Record<string, unknown>; context?: string } | null>(null);
+  const [chatHandoff, setChatHandoff] = useState<ChatHandoff | null>(null);
 
   // Sync from hash on mount + on hashchange
   useEffect(() => {
@@ -65,9 +75,15 @@ export default function Home() {
     setView(v);
   }, []);
 
-  // Navigate to order with quote data from chat
-  const navigateToOrderWithQuote = useCallback((quote: { price: number; summary?: string; breakdown?: Record<string, unknown>; context?: string }) => {
-    setChatQuote(quote);
+  // Navigate to order with SPECS from chat (engine-priced catalog job)
+  const navigateToOrderWithSpecs = useCallback((handoff: ChatHandoff) => {
+    setChatHandoff(handoff);
+    navigate("order");
+  }, [navigate]);
+
+  // Navigate to order in custom mode (no catalog match / "something else")
+  const navigateToOrderCustom = useCallback((handoff?: ChatHandoff) => {
+    setChatHandoff({ ...handoff, custom: true });
     navigate("order");
   }, [navigate]);
 
@@ -84,10 +100,16 @@ export default function Home() {
       <Nav view={view} onNavigate={navigate} />
       <main className="flex-1 mt-16">
         {view === "home" && <HomeView onNavigate={navigate} />}
-        {view === "order" && <OrderView onNavigate={navigate} chatQuote={chatQuote} />}
+        {view === "order" && <OrderView onNavigate={navigate} chatHandoff={chatHandoff} />}
         {view === "track" && <TrackView onNavigate={navigate} />}
         {view === "dashboard" && <DashboardView onNavigate={navigate} />}
-        {view === "chat" && <ChatView onNavigate={navigate} onOrderWithQuote={navigateToOrderWithQuote} />}
+        {view === "chat" && (
+          <ChatView
+            onNavigate={navigate}
+            onOrderWithQuote={navigateToOrderWithSpecs}
+            onOrderCustom={navigateToOrderCustom}
+          />
+        )}
         {view === "login" && <LoginView onNavigate={navigate} />}
         {view === "contact" && <ContactView onNavigate={navigate} />}
         {view === "privacy" && <PrivacyView onNavigate={navigate} />}
@@ -95,7 +117,7 @@ export default function Home() {
         {view === "delivery" && <DeliveryView onNavigate={navigate} />}
         {view === "refund" && <RefundPolicyView onNavigate={navigate} />}
         {view === "cancellation" && <CancellationPolicyView onNavigate={navigate} />}
-        {view === "calculator" && <CalculatorView onNavigate={navigate} />}
+        {view === "calculator" && <CalculatorView onNavigate={navigate} onCustomQuote={navigateToOrderCustom} />}
         {view === "faq" && <FaqView onNavigate={navigate} />}
         {view === "addresses" && <AddressesView onNavigate={navigate} />}
         {view === "designs" && <DesignsView onNavigate={navigate} />}

@@ -5,8 +5,9 @@ import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { ArrowLeft, ArrowRight, Check, Upload, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from 'sonner';
-import { matchChatQuoteToService, buildChatOrderNotes } from "@/lib/chat-order";
-import type { ChatQuote } from "@/lib/chat";
+import { buildChatOrderNotes } from "@/lib/chat-order";
+import type { ChatSpecs, Availability } from "@/lib/chat";
+import { AvailabilityLine } from "../AvailabilityLine";
 
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
@@ -44,6 +45,22 @@ interface QuoteBreakdown {
 interface QuoteResponse {
   quoteNaira: number;
   breakdown?: QuoteBreakdown;
+  availability?: Availability | null;
+  quoteId?: string;
+  quoteNumber?: string;
+  quoteExpiresAt?: string | null;
+}
+
+/** Minimal order shape returned by POST /api/orders (and quote accept). */
+interface CreatedOrder {
+  orderNumber: string;
+  serviceLabel?: string;
+  serviceType?: string;
+  quantity?: number;
+  totalAmount: number;
+  sla?: string;
+  state: string;
+  customerEmail?: string;
 }
 
 /* ── Saved address (for the delivery-step picker) ── */
@@ -89,12 +106,19 @@ const CATEGORY_LABELS: Record<string, string> = {
   ADD_ON: "Add-ons",
 };
 
+/** Handoff from the chat assistant (or calculator) — SPECS-based, no [QUOTE]. */
+interface ChatHandoff {
+  specs?: ChatSpecs;
+  custom?: boolean;
+  context?: string;
+}
+
 export default function OrderView({
   onNavigate,
-  chatQuote,
+  chatHandoff,
 }: {
   onNavigate: (v: ViewId) => void;
-  chatQuote?: { price: number; summary?: string; breakdown?: Record<string, unknown>; context?: string } | null;
+  chatHandoff?: ChatHandoff | null;
 }) {
   const [step, setStep] = useState(0);
   const [services, setServices] = useState<Service[]>([]);
@@ -113,41 +137,56 @@ export default function OrderView({
   const [uploadFiles, setUploadFiles] = useState<{ name: string; data: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [chatPrefillApplied, setChatPrefillApplied] = useState(false);
-  const [chatMapping, setChatMapping] = useState<{ fromLabel: string; toLabel: string; mapped: boolean } | null>(null);
 
-  // Prefill from chat quote: map the AI's quoted service onto the catalog
-  // (even when there is no exact template — "Full Buba" → fabric_buba etc.),
-  // prefill quantity/SLA/delivery/notes from the quote breakdown, and jump to
-  // the Details step so the customer only reviews, doesn't re-enter everything.
+  // Custom job mode ("Something else" / chat handoff with no catalog match):
+  // describe the job, we price it via rules or confirm pricing quickly.
+  const [customMode, setCustomMode] = useState(false);
+  const [customDescription, setCustomDescription] = useState("");
+  const [customMaterial, setCustomMaterial] = useState("");
+  const [customDimensions, setCustomDimensions] = useState("");
+
+  // Order created successfully — drives the success screen (QUOTING orders
+  // skip payment until the team confirms the price).
+  const [createdOrder, setCreatedOrder] = useState<CreatedOrder | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+
+  // Prefill from chat specs: EXACT service_type mapping (no fuzzy matching —
+  // the AI's service_type is authoritative), custom mode when the job has no
+  // catalog match, then jump to the Details step so the customer only
+  // reviews, doesn't re-enter everything.
   useEffect(() => {
-    if (chatPrefillApplied || !chatQuote || servicesLoading || services.length === 0) return;
-    const breakdown = chatQuote.breakdown || {};
-    const quote = chatQuote as ChatQuote;
-    const { service, mapped } = matchChatQuoteToService(quote, services);
-    const notes = buildChatOrderNotes(quote, chatQuote.context || null);
+    if (chatPrefillApplied || !chatHandoff || servicesLoading || services.length === 0) return;
+    const specs = chatHandoff.specs;
+    const context = chatHandoff.context || null;
 
-    // ALWAYS select a service when a match/fallback exists — even when the AI
-    // item has no exact template (e.g. "Full Buba" → fabric_buba).
-    if (service) setServiceType(service.type);
-    setQty(typeof breakdown.quantity === 'number' && breakdown.quantity > 0 ? breakdown.quantity : 1);
-    setSla(breakdown.sla === 'Express' ? 'Express' : 'Standard');
-    if ((breakdown.deliveryFee as number || 0) > 0) setDelivery('lagos');
-    if (notes) setNotes(notes);
-
-    // Tell the customer when the AI's item was mapped to a different catalog
-    // service (e.g. "Full Buba" is an exact match; "Wedding buba set" → mapped).
-    if (service) {
-      const labelDiffers =
-        !!breakdown.serviceLabel &&
-        String(breakdown.serviceLabel).trim().toLowerCase() !== service.label.trim().toLowerCase();
-      if (mapped || labelDiffers) {
-        setChatMapping({ fromLabel: String(breakdown.serviceLabel || 'your request'), toLabel: service.label, mapped });
+    if (chatHandoff.custom || !specs?.service_type) {
+      // Custom job (from chat with no catalog match, or calculator link)
+      setCustomMode(true);
+      setCustomDescription(specs?.custom_description || "");
+      setCustomMaterial(specs?.material || "");
+      setCustomDimensions("");
+      if (specs && specs.quantity > 0) setQty(specs.quantity);
+      if (specs?.sla === "Express") setSla("Express");
+      const notesText = buildChatOrderNotes(specs, context);
+      if (notesText) setNotes(notesText);
+    } else {
+      // Catalog job — exact match only
+      const match = services.find((s) => s.type === specs.service_type);
+      if (match) {
+        setServiceType(match.type);
+        if (specs.quantity > 0) setQty(specs.quantity);
+        if (specs.sla === "Express") setSla("Express");
+        if (specs.delivery === "LOCAL_DELIVERY") {
+          setDelivery("lagos");
+          if (specs.delivery_address) setAddress(specs.delivery_address);
+        }
+        const notesText = buildChatOrderNotes(specs, context);
+        if (notesText) setNotes(notesText);
       }
     }
-    // Jump to the Details step (index 1) when the service was prefilled
-    if (service) setStep(1);
+    setStep(1);
     setChatPrefillApplied(true);
-  }, [chatQuote, services, servicesLoading, chatPrefillApplied]);
+  }, [chatHandoff, services, servicesLoading, chatPrefillApplied]);
   const [paymentProcessing, setPaymentProcessing] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
@@ -330,6 +369,16 @@ export default function OrderView({
     setQuoteLoading(true);
     const t = setTimeout(async () => {
       try {
+        // Include the customer phone (when known) so the admin persists a
+        // price SNAPSHOT — the "same price when they come back" guarantee.
+        let custPhone: string | undefined;
+        try {
+          const raw = localStorage.getItem("skyal_customer");
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed?.phone) custPhone = parsed.phone;
+          }
+        } catch { /* ignore storage errors */ }
         const res = await fetch(`${API_URL}/api/services/quote`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -340,6 +389,7 @@ export default function OrderView({
             sla,
             deliveryMethod: delivOption?.apiMethod,
             referralCode: referral || undefined,
+            ...(custPhone ? { customerPhone: custPhone } : {}),
           }),
         });
         const data = await res.json();
@@ -387,8 +437,8 @@ export default function OrderView({
     quote?.breakdown?.subtotal ?? (service ? service.basePriceNaira * qty : 0);
 
   const canNext =
-    (step === 0 && !!serviceType) ||
-    (step === 1 && qty > 0) ||
+    (step === 0 && (customMode || !!serviceType)) ||
+    (step === 1 && (customMode ? qty > 0 && !!customDescription.trim() : qty > 0)) ||
     (step === 2 && (delivery === "pickup" || address.trim().length > 4)) ||
     (step === 3 && name.trim() && phone.trim().length >= 6) ||
     step === 4;
@@ -454,10 +504,11 @@ export default function OrderView({
         ? uploadedFiles.map(f => f.publicId).filter(Boolean).join(',') || undefined
         : undefined;
 
-      // Step 1: Create the order
-      const payload: Record<string, unknown> = {
+      // Step 1: Create the order — catalog path sends serviceType; custom mode
+      // sends customSpec and the ADMIN runs the rule lookup (jeans → fabric_custom
+      // ₦20k, wood → engraving_wood; truly novel jobs land in QUOTING).
+      const basePayload: Record<string, unknown> = {
         brand: "SKYAL",
-        serviceType,
         quantity: qty,
         sla,
         customerName: name.trim(),
@@ -465,17 +516,29 @@ export default function OrderView({
         customerEmail: email.trim() || `customer@skyal.ng`,
         deliveryMethod: delivOption?.apiMethod,
       };
-      if (delivery !== "pickup") payload.deliveryAddress = address.trim();
+      if (delivery !== "pickup") basePayload.deliveryAddress = address.trim();
       if (designFileUrl) {
-        payload.designFileUrl = designFileUrl;
-        payload.designFilePublicId = designFilePublicId;
+        basePayload.designFileUrl = designFileUrl;
+        basePayload.designFilePublicId = designFilePublicId;
       }
       const noteParts: string[] = [notes].filter(Boolean);
       if (referral) noteParts.push(`Referral: ${referral}`);
       if (uploadFiles.length > 0) {
         noteParts.push(`--- Design files: ${uploadFiles.map(f => f.name).join(', ')} ---`);
       }
-      if (noteParts.length) payload.customerNotes = noteParts.join('\n');
+      if (noteParts.length) basePayload.customerNotes = noteParts.join('\n');
+
+      const payload: Record<string, unknown> = customMode
+        ? {
+            ...basePayload,
+            customSpec: {
+              description: customDescription.trim(),
+              material: customMaterial.trim() || undefined,
+              dimensions: customDimensions.trim() || undefined,
+              complexity: 'simple',
+            },
+          }
+        : { ...basePayload, serviceType };
 
       const res = await fetch(`${API_URL}/api/orders`, {
         method: "POST",
@@ -488,81 +551,76 @@ export default function OrderView({
         setSubmitting(false);
         return;
       }
-      const order = data.data || data;
+      const order = (data.data || data) as CreatedOrder;
       const orderNumber = order.orderNumber || "";
-      const amountNaira = quote?.quoteNaira || fallbackEstimate;
 
-      // Validate amount
-      if (!amountNaira || amountNaira <= 0) {
-        throw new Error('Invalid order amount');
-      }
-
-      // Paystack expects amount in kobo (1 NGN = 100 kobo)
-      const amountInKobo = Math.round(amountNaira * 100);
-
-      // Use a valid email format - require email or use a proper placeholder
-      const emailToUse = email.trim() ? email.trim() : `order${orderNumber}@skyal.ng`;
-
-      // Step 2: Initialize Paystack payment
-      setPaymentProcessing(true);
-
-      try {
-        // Convert back to Naira for admin backend (which expects Naira and converts to kobo)
-        const amountInNaira = amountInKobo / 100;
-        
-        // Safely compute the app origin to avoid duplicate path segments in callbackUrl
-        const appOrigin = (() => {
-          const base = process.env.NEXT_PUBLIC_APP_URL || 'https://skyalproj.vercel.app';
-          try {
-            const url = new URL(base);
-            return `${url.protocol}//${url.hostname}${url.port ? ':' + url.port : ''}`;
-          } catch {
-            return base;
-          }
-        })();
-
-        const paystackRes = await fetch(`${API_URL}/api/payment/initialize`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            amount: amountInNaira,  // Send in Naira, not kobo
-            email: emailToUse,
-            orderNumber: orderNumber,
-            metadata: { brand: "SKYAL" },
-            callbackUrl: `${appOrigin}/order/callback?order=${orderNumber}`,
-          }),
-        });
-
-        if (!paystackRes.ok) {
-          const errData = await paystackRes.json().catch(() => ({}));
-          throw new Error(errData?.error?.message || 'Failed to initialize payment');
-        }
-
-        const paystackData = await paystackRes.json();
-        const authUrl = paystackData.data?.authorization_url || paystackData.data?.authorizationUrl;
-        const reference = paystackData.data?.reference || paystackData.data?.ref;
-
-        if (!authUrl) {
-          throw new Error('Paystack authorization URL missing');
-        }
-
-        // Store pending payment info for verification after return
-        sessionStorage.setItem('skyal_pending_payment', JSON.stringify({ orderNumber, reference }));
-
-        // Step 3: Redirect to Paystack checkout
-        window.location.href = authUrl;
-      } catch (paystackError: any) {
-        setSubmitError(`Payment initialization failed: ${paystackError.message || ''}`);
-        setPaymentProcessing(false);
-        setSubmitting(false);
-        throw paystackError;
+      // Step 2: Success screen. Provisional QUOTING orders (unpriced custom
+      // jobs) skip payment until the team confirms the price — the customer
+      // pays from the dashboard.
+      setCreatedOrder(order);
+      if (order.state !== "QUOTING") {
+        await startPayment(order);
       }
     } catch (error) {
       console.error(error);
-      if (!paymentProcessing && !submitting) {
-        setSubmitError('An unexpected error occurred. Please try again.');
-        setSubmitting(false);
+      setSubmitError('An unexpected error occurred. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  /** Initialize Paystack payment and redirect to checkout. */
+  const startPayment = async (order: CreatedOrder) => {
+    setPaymentError(null);
+    setPaymentProcessing(true);
+    try {
+      // Safely compute the app origin to avoid duplicate path segments in callbackUrl
+      const appOrigin = (() => {
+        const base = process.env.NEXT_PUBLIC_APP_URL || 'https://skyalproj.vercel.app';
+        try {
+          const url = new URL(base);
+          return `${url.protocol}//${url.hostname}${url.port ? ':' + url.port : ''}`;
+        } catch {
+          return base;
+        }
+      })();
+
+      const paystackRes = await fetch(`${API_URL}/api/payment/initialize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: order.totalAmount, // Send in Naira, not kobo
+          email: (email.trim() || order.customerEmail || `order${order.orderNumber}@skyal.ng`),
+          orderNumber: order.orderNumber,
+          brand: "SKYAL",
+          metadata: { orderNumber: order.orderNumber, brand: "SKYAL" },
+          callbackUrl: `${appOrigin}/order/complete?order=${order.orderNumber}`,
+        }),
+      });
+
+      if (!paystackRes.ok) {
+        const errData = await paystackRes.json().catch(() => ({}));
+        throw new Error(errData?.error?.message || 'Failed to initialize payment');
       }
+
+      const paystackData = await paystackRes.json();
+      const authUrl = paystackData.data?.authorization_url || paystackData.data?.authorizationUrl;
+      const reference = paystackData.data?.reference || paystackData.data?.ref;
+
+      if (!authUrl) {
+        throw new Error('Paystack authorization URL missing');
+      }
+
+      // Store pending payment info for verification after return
+      sessionStorage.setItem('skyal_pending_payment', JSON.stringify({ orderNumber: order.orderNumber, reference }));
+
+      // Step 3: Redirect to Paystack checkout
+      window.location.href = authUrl;
+    } catch (payErr: any) {
+      // Order is already created — surface the failure so the customer can retry
+      console.warn('Payment init failed:', payErr);
+      setPaymentError(payErr?.message || 'Payment could not be initialized. Use the button below to retry.');
+      setPaymentProcessing(false);
     }
   };
 
@@ -578,10 +636,119 @@ export default function OrderView({
     setReferral("");
     setQuote(null);
     setSubmitError(null);
+    setCustomMode(false);
+    setCustomDescription("");
+    setCustomMaterial("");
+    setCustomDimensions("");
   };
 
   // Check for pending payment to show warning
   const hasPendingPayment = !!sessionStorage.getItem('skyal_pending_payment');
+
+  /* ──────── Success State ──────── */
+  if (createdOrder) {
+    const quoting = createdOrder.state === "QUOTING";
+    return (
+      <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-10 py-12 lg:py-20">
+        <div className="max-w-2xl mx-auto text-center">
+          <Coord>ORDER RECEIVED</Coord>
+          <Heading className="text-4xl sm:text-5xl lg:text-6xl mt-4">
+            We&apos;ve got your specs<span className="text-laser">.</span>
+          </Heading>
+          <p className="text-base text-thread mt-6 leading-relaxed max-w-[560px] mx-auto">
+            {quoting ? (
+              <>
+                Your order <span className="font-mono text-ink">{createdOrder.orderNumber}</span> is
+                in — we&apos;re confirming the exact price now. You&apos;ll get a notification,
+                then just review and pay.
+              </>
+            ) : (
+              <>
+                Your order <span className="font-mono text-ink">{createdOrder.orderNumber}</span> is
+                in. We&apos;ll confirm your design and get it on the bed shortly.
+              </>
+            )}
+          </p>
+
+          <div className="mt-10 bg-vellum border border-hairline p-6 text-left">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-thread mb-1">
+                  Service
+                </div>
+                <div className="text-ink">
+                  {createdOrder.serviceLabel || (customMode ? (customDescription || "Custom job") : service?.label) || createdOrder.serviceType || "—"}
+                </div>
+              </div>
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-thread mb-1">
+                  Quantity
+                </div>
+                <div className="text-ink">{createdOrder.quantity ?? qty}</div>
+              </div>
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-thread mb-1">
+                  Total
+                </div>
+                <div className="text-ink font-display font-semibold">
+                  {formatNaira(createdOrder.totalAmount)}
+                </div>
+              </div>
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-thread mb-1">
+                  SLA
+                </div>
+                <div className="text-ink">{createdOrder.sla || sla}</div>
+              </div>
+            </div>
+          </div>
+
+          {quoting && (
+            <div className="mt-6 bg-vellum border border-laser/30 p-4 text-left">
+              <p className="text-sm text-thread leading-relaxed">
+                Awaiting pricing — we&apos;ll confirm the exact price, then just pay.
+                No payment is needed right now.
+              </p>
+            </div>
+          )}
+
+          {paymentError && (
+            <div className="mt-6 bg-oxblood/10 border-l-2 border-oxblood p-4 text-left">
+              <p className="text-sm text-oxblood mb-3">{paymentError}</p>
+              <button
+                onClick={() => startPayment(createdOrder)}
+                disabled={paymentProcessing}
+                className="inline-flex items-center gap-2 bg-laser text-white text-sm font-medium px-6 py-3 hover:bg-ink transition-colors disabled:opacity-50"
+              >
+                {paymentProcessing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Starting payment…
+                  </>
+                ) : (
+                  <>Retry Payment</>
+                )}
+              </button>
+            </div>
+          )}
+
+          <div className="mt-10 flex justify-center gap-4 flex-wrap">
+            <button
+              onClick={() => onNavigate("track")}
+              className="inline-flex items-center gap-2 bg-ink text-bone text-sm font-medium px-6 py-3.5 hover:bg-laser hover:text-white transition-colors"
+            >
+              Track This Order <ArrowRight className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => onNavigate("dashboard")}
+              className="inline-flex items-center gap-2 border border-ink/25 text-ink text-sm font-medium px-6 py-3.5 hover:border-ink hover:bg-ink hover:text-bone transition-colors"
+            >
+              Go to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-10 py-12 lg:py-20">
@@ -615,23 +782,6 @@ export default function OrderView({
       </div>
       <div className="h-px bg-hairline mb-10" />
 
-      {/* Chat-quote mapping notice: the AI's item was mapped to a different
-          catalog service — tell the customer, let them change it. */}
-      {chatMapping && (
-        <div className="mb-8 border border-laser/40 bg-laser/5 p-4 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <p className="text-sm text-ink leading-relaxed">
-            From your chat: “{chatMapping.fromLabel}” — mapped to “{chatMapping.toLabel}”
-            {chatMapping.mapped ? " (closest available service)" : ""}. You can change it below.
-          </p>
-          <button
-            onClick={() => setStep(0)}
-            className="ml-auto text-xs font-medium text-laser hover:text-ink transition-colors underline underline-offset-2"
-          >
-            Change service
-          </button>
-        </div>
-      )}
-
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-10">
         {/* ── Step body ── */}
         <div>
@@ -662,7 +812,25 @@ export default function OrderView({
                 </div>
               )}
 
-              {!servicesLoading && !servicesError && servicesByCategory.map(([cat, list]) => (
+              {customMode && (
+                <div className="mb-6 border border-laser/40 bg-laser/5 p-5">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-laser mb-2">
+                    Custom job mode
+                  </div>
+                  <p className="text-sm text-thread leading-relaxed">
+                    You&apos;re ordering a bespoke job (from chat or the &ldquo;Something else&rdquo; option).
+                    Describe it on the next step — we&apos;ll confirm the exact price quickly.
+                  </p>
+                  <button
+                    onClick={() => { setCustomMode(false); setStep(0); }}
+                    className="text-xs text-laser hover:text-ink underline underline-offset-2 mt-3"
+                  >
+                    ← Browse catalog services instead
+                  </button>
+                </div>
+              )}
+
+              {!customMode && !servicesLoading && !servicesError && servicesByCategory.map(([cat, list]) => (
                 <div key={cat} className="mb-8 last:mb-0">
                   <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread mb-3">
                     {CATEGORY_LABELS[cat] || cat.replace(/_/g, " ")} · {list.length}
@@ -671,7 +839,7 @@ export default function OrderView({
                     {list.map((s) => (
                       <button
                         key={s.id}
-                        onClick={() => { setServiceType(s.type); setChatMapping(null); }}
+                        onClick={() => { setServiceType(s.type); setCustomMode(false); }}
                         className={`text-left p-5 border transition-colors ${
                           serviceType === s.type
                             ? "border-laser bg-vellum"
@@ -698,10 +866,79 @@ export default function OrderView({
                   </div>
                 </div>
               ))}
+
+              {/* Something else / custom job — no catalog match needed */}
+              {!customMode && !servicesLoading && !servicesError && (
+                <button
+                  onClick={() => { setCustomMode(true); setStep(1); }}
+                  className="w-full text-left p-5 border border-dashed border-ink/30 bg-bone hover:border-laser hover:bg-vellum transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-display font-semibold text-lg text-ink mt-0.5">
+                        Something else / custom job
+                      </div>
+                      <div className="text-[13px] text-thread mt-1.5 leading-relaxed">
+                        Cutting jeans, engraving wood, a bespoke piece? Describe it and we&apos;ll
+                        confirm the exact price fast.
+                      </div>
+                    </div>
+                    <ArrowRight className="w-5 h-5 text-laser shrink-0 mt-1" />
+                  </div>
+                </button>
+              )}
             </div>
           )}
 
-          {step === 1 && service && (
+          {step === 1 && (customMode ? (
+            <div>
+              <h2 className="font-display font-semibold text-2xl text-ink mb-1">Describe your job</h2>
+              <p className="text-sm text-thread mb-6">
+                Tell us what you need — we&apos;ll confirm the exact price quickly.
+              </p>
+              <div className="space-y-6">
+                <div>
+                  <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
+                    What do you need?
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={customDescription}
+                    onChange={(e) => setCustomDescription(e.target.value)}
+                    placeholder="e.g. Cut my jeans into a pattern · Engrave a wooden tray · A bespoke acrylic sign…"
+                    className="mt-2 w-full bg-bone border border-hairline px-4 py-3 text-sm text-ink focus:border-laser outline-none resize-none"
+                    required
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
+                      Material <span className="lowercase">(optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={customMaterial}
+                      onChange={(e) => setCustomMaterial(e.target.value)}
+                      placeholder="denim, wood, acrylic…"
+                      className="mt-2 w-full bg-bone border border-hairline px-4 py-3 text-sm text-ink focus:border-laser outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
+                      Size / notes <span className="lowercase">(optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={customDimensions}
+                      onChange={(e) => setCustomDimensions(e.target.value)}
+                      placeholder="waist 34, length 40…"
+                      className="mt-2 w-full bg-bone border border-hairline px-4 py-3 text-sm text-ink focus:border-laser outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : service && (
             <div>
               <h2 className="font-display font-semibold text-2xl text-ink mb-1">Specify details</h2>
               <p className="text-sm text-thread mb-6">{service.label} — how much, how fast?</p>
@@ -843,7 +1080,7 @@ export default function OrderView({
                 </div>
               </div>
             </div>
-          )}
+          ))}
 
           {step === 2 && (
             <div>
@@ -940,8 +1177,11 @@ export default function OrderView({
               <h2 className="font-display font-semibold text-2xl text-ink mb-1">Review &amp; confirm</h2>
               <p className="text-sm text-thread mb-6">Check everything looks right.</p>
               <dl className="divide-y divide-hairline border-y border-hairline">
-                <Row k="Service" v={service ? `${service.label} · ${CATEGORY_LABELS[service.category] || service.category}` : "—"} />
-                <Row k="Quantity" v={`${qty} ${service?.unit ?? ""}`} />
+                <Row k="Service" v={customMode ? (customDescription || "Custom job") : service ? `${service.label} · ${CATEGORY_LABELS[service.category] || service.category}` : "—"} />
+                {customMode && (customMaterial || customDimensions) && (
+                  <Row k="Material / size" v={[customMaterial, customDimensions].filter(Boolean).join(" · ")} />
+                )}
+                <Row k="Quantity" v={customMode ? `${qty}` : `${qty} ${service?.unit ?? ""}`} />
                 <Row k="Turnaround" v={sla} />
                 <Row k="Delivery" v={delivOption?.label ?? "—"} />
                 {delivery !== "pickup" && address && <Row k="Address" v={address} />}
@@ -957,10 +1197,16 @@ export default function OrderView({
                     {quoteLoading ? "calculating…" : "estimated total"}
                   </div>
                   <div className="text-xs text-thread mt-0.5">
-                    {quote ? "Live quote · final price confirmed in your inbox" : "Final price confirmed in your quote"}
+                    {customMode
+                      ? "We'll confirm the exact price — pay once it's ready"
+                      : quote
+                        ? "Live quote · the price you pay is confirmed below"
+                        : "Final price confirmed in your quote"}
                   </div>
                 </div>
-                <div className="font-display font-semibold text-3xl text-ink tnum">{formatNaira(quoteTotal)}</div>
+                <div className="font-display font-semibold text-3xl text-ink tnum">
+                  {customMode ? "—" : formatNaira(quoteTotal)}
+                </div>
               </div>
               {submitError && (
                 <div className="mt-4 border-l-2 border-leather bg-vellum p-4 flex items-start gap-2 text-leather">
@@ -969,7 +1215,7 @@ export default function OrderView({
                 </div>
               )}
               <p className="text-xs text-thread mt-3">
-                Pay on delivery or pay now via Paystack — your choice after the quote.
+                Payment is processed securely via Paystack after we confirm your order.
               </p>
             </div>
           )}
@@ -1004,6 +1250,10 @@ export default function OrderView({
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" /> Creating order...
                   </>
+                ) : customMode ? (
+                  <>
+                    Place Custom Order <Check className="w-4 h-4" />
+                  </>
                 ) : (
                   <>
                     Pay & Submit <Check className="w-4 h-4" />
@@ -1020,7 +1270,23 @@ export default function OrderView({
             <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone/60 mb-4">
               live quote
             </div>
-            {service ? (
+            {customMode ? (
+              <>
+                <div className="font-display font-semibold text-xl">Custom job</div>
+                <div className="text-sm text-bone/70 mt-1">
+                  {customDescription || "Describe your job on the form"}
+                  {customMaterial ? ` · ${customMaterial}` : ""}
+                </div>
+                <div className="my-5 h-px bg-bone/20" />
+                <div className="flex items-baseline justify-between">
+                  <span className="text-sm text-bone/70">Price</span>
+                  <span className="font-display font-semibold text-3xl tnum">—</span>
+                </div>
+                <div className="mt-3 text-[11px] text-bone/60 leading-relaxed">
+                  We&apos;ll confirm the exact price right after you submit — usually within minutes.
+                </div>
+              </>
+            ) : service ? (
               <>
                 <div className="font-display font-semibold text-xl">{service.label}</div>
                 <div className="text-sm text-bone/70 mt-1">
@@ -1045,10 +1311,15 @@ export default function OrderView({
                     lead time · {quote.breakdown.leadTime}
                   </div>
                 )}
+                {quote?.availability && (
+                  <div className="mt-4 pt-4 border-t border-bone/20">
+                    <AvailabilityLine availability={quote.availability} />
+                  </div>
+                )}
               </>
             ) : (
               <p className="text-sm text-bone/70 leading-relaxed">
-                Pick a service to see a live estimate. Final price confirmed in your quote within 4 hours.
+                Pick a service to see a live estimate, or choose &ldquo;Something else / custom job&rdquo; for bespoke work.
               </p>
             )}
           </div>

@@ -72,11 +72,11 @@ if IS_SKYAL:
     DATASET_OUT_NAME = "skyal_chat_eval_dataset.json"
     ANALYSES_OUT_NAME = "skyal_chat_analyses.json"
     ASSISTANT_DISPLAY = "Skyal"
-    # Where the deployed assistant's system prompt lives (Skyal keeps it in
-    # the route file; Paberin keeps it in src/lib/chat.ts).
+    # Where the deployed assistant's system prompt lives (src/lib/chat.ts,
+    # same as Paberin — the [SPECS] contract lives in the shared lib).
     LIVE_PROMPT_PATH = Path(os.environ.get(
-        "SKYAL_ROUTE_PATH",
-        "/home/doombuggy_/Projects/skyalproj/src/app/api/chat/route.ts",
+        "SKYAL_PROMPT_PATH",
+        str(REPO_ROOT / "src" / "lib" / "chat.ts"),
     ))
     LIVE_PROMPT_CONST = "SKYAL_SYSTEM_PROMPT"
 else:
@@ -637,9 +637,8 @@ def pass1_segment(seg: dict) -> dict:
 
 def load_live_system_prompt() -> str:
     """Extract the deployed assistant's system prompt so ideal responses are
-    generated under the SAME instructions the assistant uses. Skyal keeps its
-    prompt (SKYAL_SYSTEM_PROMPT) in src/app/api/chat/route.ts; Paberin keeps
-    PABERIN_SYSTEM_PROMPT in src/lib/chat.ts."""
+    generated under the SAME instructions the assistant uses. Both brands
+    keep their prompt exported from src/lib/chat.ts."""
     text = LIVE_PROMPT_PATH.read_text(encoding="utf-8")
     m = re.search(r"export const %s = `([\s\S]*?)`;" % LIVE_PROMPT_CONST, text)
     if not m:
@@ -652,13 +651,13 @@ def build_pass2_prompt() -> str:
     live = load_live_system_prompt()
     return f"""You are generating the IDEAL response that %(brand)s's AI assistant should produce for a given customer inquiry.
 
-The assistant operates under EXACTLY this system prompt (its full knowledge of services, prices, rules, tone, and [QUOTE] format):
+The assistant operates under EXACTLY this system prompt (its full knowledge of services, tone, and the [SPECS] extraction contract — the AI NEVER prices; the system computes exact prices via the pricing engine):
 
 <assistant-system-prompt>
 {live}
 </assistant-system-prompt>
 
-Your job: given a real customer inquiry from Paberin's WhatsApp history, write the response the IDEAL assistant would give in that situation — following the assistant's system prompt rules precisely (correct catalog prices, lead times, express rules, delivery fees, Nigerian-friendly tone with "ma"/"sir", clarifying questions when details are missing, [QUOTE] block when a quote can be built).
+Your job: given a real customer inquiry from %(brand)s's WhatsApp history, write the response the IDEAL assistant would give in that situation — following the assistant's system prompt rules precisely (extract the structured [SPECS] block when the request is complete, ask clarifying questions when details are missing, NEVER invent prices in the response text, Nigerian-friendly tone with "ma"/"sir").
 
 Return ONLY valid JSON: {{"ideal_response": "your full response text here"}}"""
 

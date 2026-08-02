@@ -32,11 +32,12 @@ export default function LoginView({
       }
       setLoading(true);
       try {
-        // Call admin API to verify phone and get orders
+        // Call admin API to verify phone and get orders — brand filter so a
+        // SKYAL customer never sees PABERIN orders.
         const res = await fetch(`${API_URL}/api/magic-link`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: phone.trim() }),
+          body: JSON.stringify({ phone: phone.trim(), brand: "SKYAL" }),
         });
         const data = await res.json();
         if (!res.ok) {

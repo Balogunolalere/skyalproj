@@ -99,7 +99,6 @@ interface TimelineEntry {
 interface OrderDetail extends Order {
   deliveryAddress?: string | null;
   timeline?: TimelineEntry[];
-  trackingPin?: string | null;
   canModify?: boolean;
   canCancel?: boolean;
   gracePeriodExpires?: string | null;
@@ -117,6 +116,20 @@ interface Escalation {
   updatedAt?: string;
   messageCount?: number;
   lastAdminMessageAt?: string | null;
+}
+
+/** Saved quote snapshot (mirror of the admin GET /api/quotes?phone= row). */
+interface SavedQuote {
+  id: string;
+  quoteNumber: string;
+  totalAmount: number;
+  discount?: number;
+  deliveryFee?: number;
+  serviceType?: string | null;
+  status: string;
+  expiresAt?: string | null;
+  createdAt: string;
+  requestJson?: string;
 }
 
 const STATE_COLOR: Record<string, string> = {
@@ -231,7 +244,7 @@ export default function DashboardView({
       const res = await fetch(`${API_URL}/api/magic-link`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phoneVal }),
+        body: JSON.stringify({ phone: phoneVal, brand: "SKYAL" }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -288,6 +301,96 @@ export default function DashboardView({
       return null;
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  /* ── Saved quotes (same price when they come back) ── */
+  const [openQuotes, setOpenQuotes] = useState<SavedQuote[]>([]);
+  const [quotesError, setQuotesError] = useState<string | null>(null);
+
+  const loadQuotes = useCallback(async () => {
+    if (!phone) return;
+    try {
+      const res = await fetch(`${API_URL}/api/quotes?phone=${encodeURIComponent(phone)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setOpenQuotes([]);
+        return;
+      }
+      const list = Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : [];
+      setOpenQuotes(list);
+      setQuotesError(null);
+    } catch {
+      setOpenQuotes([]);
+    }
+  }, [phone]);
+
+  /** Initialize Paystack for an order and redirect (also used for quote acceptance). */
+  const payOrder = useCallback(async (order: Order | OrderDetail) => {
+    const email =
+      (order as OrderDetail).customerEmail ||
+      (() => {
+        try {
+          const raw = localStorage.getItem("skyal_customer");
+          if (raw) return JSON.parse(raw)?.email || "";
+        } catch {
+          // ignore
+        }
+        return "";
+      })() ||
+      `${String(phone || "customer").replace(/\D/g, "")}@skyal.ng`;
+    // Safely compute the app origin to avoid duplicate path segments in callbackUrl
+    const appOrigin = (() => {
+      const base = process.env.NEXT_PUBLIC_APP_URL || "https://skyalproj.vercel.app";
+      try {
+        const url = new URL(base);
+        return `${url.protocol}//${url.hostname}${url.port ? ":" + url.port : ""}`;
+      } catch {
+        return base;
+      }
+    })();
+    const res = await fetch(`${API_URL}/api/payment/initialize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount: order.totalAmount,
+        email,
+        orderNumber: order.orderNumber,
+        brand: "SKYAL",
+        metadata: { orderNumber: order.orderNumber, brand: "SKYAL" },
+        callbackUrl: `${appOrigin}/order/complete?order=${order.orderNumber}`,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data?.error?.message || "Payment could not be initialized.");
+    }
+    const authUrl = data.data?.authorization_url || data.data?.authorizationUrl;
+    if (!authUrl) {
+      throw new Error("Payment could not be started — no checkout link returned.");
+    }
+    window.location.href = authUrl;
+  }, [phone]);
+
+  /** Accept a saved quote (creates the order from the snapshot) and pay. */
+  const acceptAndPay = async (q: SavedQuote) => {
+    if (!phone) return;
+    setQuotesError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/quotes/${encodeURIComponent(q.id)}/accept`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customerPhone: phone }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error?.message || "Could not accept the quote. Please try again.");
+      }
+      const order = (data.data || data) as Order;
+      await payOrder(order);
+    } catch (err) {
+      setQuotesError(err instanceof Error ? err.message : "Could not accept the quote. Please try again.");
+      loadQuotes();
     }
   };
 
@@ -539,6 +642,7 @@ export default function DashboardView({
             fetchOrders(c.phone);
             fetchEscalations(c.phone);
             loadEmailPreferences(c.phone);
+            loadQuotes();
           } else {
             // Signed in but no phone on file — can't fetch orders.
             onNavigate("login");
@@ -988,6 +1092,45 @@ export default function DashboardView({
         </div>
       )}
 
+      {/* Saved quotes — same price as quoted, review & pay */}
+      {openQuotes.length > 0 && (
+        <div className="mt-12">
+          <div className="flex items-center gap-2 mb-4">
+            <Coord>YOUR SAVED QUOTES</Coord>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {openQuotes.map((q) => (
+              <div key={q.id} className="bg-vellum border border-laser/30 p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-thread mb-1">
+                      {q.quoteNumber}
+                    </div>
+                    <div className="text-2xl font-display font-bold text-ink tnum">
+                      {formatNaira(q.totalAmount)}
+                    </div>
+                    <div className="text-xs text-thread mt-1">
+                      {q.expiresAt
+                        ? `Valid until ${new Date(q.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+                        : "Price locked for you"}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => acceptAndPay(q)}
+                    className="inline-flex items-center gap-2 bg-laser text-white text-xs font-medium px-4 py-2.5 hover:bg-ink hover:text-bone transition-colors shrink-0"
+                  >
+                    Accept &amp; Pay
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {quotesError && (
+            <p className="text-xs text-leather mt-3">{quotesError}</p>
+          )}
+        </div>
+      )}
+
       {/* Orders table */}
       {!loading && !error && orders.length > 0 && (
         <div className="mt-12">
@@ -1260,10 +1403,17 @@ export default function DashboardView({
                     {detailData?.deliveryAddress && (
                       <DetailItem k="Address" v={prettyAddress(detailData.deliveryAddress)} />
                     )}
-                    {detailData?.trackingPin && (
-                      <DetailItem k="Tracking PIN" v={detailData.trackingPin} />
-                    )}
                   </dl>
+
+                  {/* QUOTING banner — unpriced custom job awaiting the team */}
+                  {(detailData?.state || detailOrder.state) === "QUOTING" && (
+                    <div className="mt-6 bg-vellum border border-laser/30 p-4">
+                      <p className="text-sm text-thread leading-relaxed">
+                        Awaiting pricing — we&apos;re confirming the exact price for your custom
+                        job. You&apos;ll be able to pay right here once it&apos;s ready.
+                      </p>
+                    </div>
+                  )}
 
                   {/* Status Timeline (always rendered; empty-state aware) */}
                   <div className="mt-6">
@@ -1507,6 +1657,21 @@ export default function DashboardView({
                   ) : (
                     <div className="mt-6 space-y-3">
                       <div className="flex flex-wrap gap-2">
+                        {(detailData?.state || detailOrder.state) === "PAYMENT_PENDING" && (
+                          <button
+                            onClick={async () => {
+                              setDetailError(null);
+                              try {
+                                await payOrder(detailData || detailOrder);
+                              } catch (err) {
+                                setDetailError(err instanceof Error ? err.message : "Payment could not be initialized.");
+                              }
+                            }}
+                            className="inline-flex items-center gap-2 bg-laser text-white text-sm font-medium px-4 py-2.5 hover:bg-ink hover:text-bone transition-colors"
+                          >
+                            Pay {formatNaira(detailData?.totalAmount ?? detailOrder.totalAmount)}
+                          </button>
+                        )}
                         <button
                           onClick={() => handleReorder(detailOrder)}
                           className="inline-flex items-center gap-2 bg-ink text-bone text-sm font-medium px-4 py-2.5 hover:bg-laser hover:text-white transition-colors"

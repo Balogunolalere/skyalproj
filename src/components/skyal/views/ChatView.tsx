@@ -5,6 +5,7 @@ import { type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { Logo } from "../Logo";
 import { Send, Trash2, AlertCircle, Paperclip, X, ArrowRight, Loader2, Plus } from "lucide-react";
+import type { ChatSpecs } from "@/lib/chat";
 
 interface Msg {
   id: string;
@@ -14,6 +15,7 @@ interface Msg {
   error?: boolean;
   image?: string;
   quote?: { price: number; summary?: string; renderOrderNow?: boolean; breakdown?: Record<string, unknown> };
+  custom?: { description: string; material?: string; quantity: number; sla?: string };
 }
 
 const SUGGESTIONS = [
@@ -60,15 +62,20 @@ function renderMarkdown(text: string): React.ReactNode[] {
 export default function ChatView({
   onNavigate,
   onOrderWithQuote,
+  onOrderCustom,
 }: {
   onNavigate: (v: ViewId) => void;
-  onOrderWithQuote?: (quote: { price: number; summary?: string; breakdown?: Record<string, unknown>; context?: string }) => void;
+  /** Engine-priced catalog job → hand off the [SPECS] to the order form. */
+  onOrderWithQuote?: (handoff: { specs: ChatSpecs; context?: string }) => void;
+  /** No catalog match → hand off a custom job (custom mode in the order form). */
+  onOrderCustom?: (handoff: { specs: ChatSpecs; context?: string }) => void;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | undefined>();
+  const [openQuotes, setOpenQuotes] = useState<Array<{ id: string; quoteNumber: string; totalAmount: number; expiresAt?: string | null }> | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Last customer query — passed to the order form so the customer's own
@@ -118,8 +125,10 @@ export default function ChatView({
       if (data.sessionId) setSessionId(data.sessionId);
       const replyText = data.assistant_text || data.reply || "(no response)";
       const quote = data.quote ? { price: data.quote.price, summary: data.quote.summary, renderOrderNow: data.render_order_now, breakdown: data.quote.breakdown } : undefined;
+      const custom = data.custom ? { description: data.custom.description, material: data.custom.material, quantity: data.custom.quantity, sla: data.custom.sla } : undefined;
 
-      setMsgs(prev => [...prev, { id: `s-${Date.now()}`, who: "support", text: replyText, time: now(), quote }]);
+      setMsgs(prev => [...prev, { id: `s-${Date.now()}`, who: "support", text: replyText, time: now(), quote, custom }]);
+      if (data.openQuotes?.length) setOpenQuotes(data.openQuotes);
     } catch (err: any) {
       const status = err?.status;
       const timedOut =
@@ -199,7 +208,7 @@ export default function ChatView({
                   {renderMarkdown(m.text)}
                   {m.quote && (
                   <div className="mt-2 border border-laser/30 bg-laser/5 p-3">
-                    <div className="text-xs font-mono text-laser mb-1">QUOTE</div>
+                    <div className="text-xs font-mono text-laser mb-1">Confirmed Price</div>
                     <div className="text-sm font-bold text-ink">
                       ₦{m.quote.price.toLocaleString("en-NG")}
                     </div>
@@ -208,12 +217,45 @@ export default function ChatView({
                     )}
                     {m.quote.renderOrderNow && (
                       <button
-                        onClick={() => onOrderWithQuote ? onOrderWithQuote({ ...m.quote!, context: lastUserQueryRef.current }) : onNavigate("order")}
+                        onClick={() => {
+                          const b = (m.quote?.breakdown || {}) as Record<string, unknown>;
+                          const specs: ChatSpecs = {
+                            service_type: typeof b.serviceType === "string" ? b.serviceType : null,
+                            quantity: typeof b.quantity === "number" && b.quantity > 0 ? b.quantity : 1,
+                            sla: b.sla === "Express" ? "Express" : "Standard",
+                          };
+                          if (onOrderWithQuote) onOrderWithQuote({ specs, context: lastUserQueryRef.current });
+                          else onNavigate("order");
+                        }}
                         className="mt-2 inline-flex items-center gap-1 text-xs bg-laser text-white px-3 py-1.5 hover:bg-ink transition-colors"
                       >
                         Order Now <ArrowRight className="w-3 h-3" />
                       </button>
                     )}
+                  </div>
+                )}
+                {m.custom && !m.quote && (
+                  <div className="mt-2 border border-laser/30 bg-laser/5 p-3">
+                    <div className="text-xs font-mono text-laser mb-1">Custom job — pricing confirmed shortly</div>
+                    {m.custom.description && (
+                      <div className="text-xs text-ink mt-1">{m.custom.description}</div>
+                    )}
+                    <button
+                      onClick={() => {
+                        const specs: ChatSpecs = {
+                          service_type: null,
+                          custom_description: m.custom!.description,
+                          material: m.custom!.material,
+                          quantity: m.custom!.quantity > 0 ? m.custom!.quantity : 1,
+                          sla: m.custom!.sla === "Express" ? "Express" : undefined,
+                        };
+                        if (onOrderCustom) onOrderCustom({ specs, context: lastUserQueryRef.current });
+                        else onNavigate("order");
+                      }}
+                      className="mt-2 inline-flex items-center gap-1 text-xs bg-laser text-white px-3 py-1.5 hover:bg-ink transition-colors"
+                    >
+                      Place Custom Order <ArrowRight className="w-3 h-3" />
+                    </button>
                   </div>
                 )}
                 </div>
@@ -300,6 +342,35 @@ export default function ChatView({
           </button>
         </form>
       </div>
+
+      {/* Saved quotes banner — returning customer with OPEN quote snapshots */}
+      {openQuotes && openQuotes.length > 0 && (
+        <div className="mt-4 bg-vellum border border-laser/30 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <Coord>YOUR SAVED QUOTE{openQuotes.length > 1 ? "S" : ""}</Coord>
+              <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2">
+                {openQuotes.slice(0, 3).map((q) => (
+                  <div key={q.id} className="flex items-baseline gap-2">
+                    <span className="font-display font-semibold text-lg text-ink tnum">
+                      ₦{q.totalAmount.toLocaleString("en-NG")}
+                    </span>
+                    <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-thread">
+                      {q.quoteNumber}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <button
+              onClick={() => onNavigate("dashboard")}
+              className="inline-flex items-center gap-1.5 text-xs font-medium bg-ink text-bone px-4 py-2.5 hover:bg-laser hover:text-white transition-colors shrink-0"
+            >
+              Review &amp; pay <ArrowRight className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Info cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">

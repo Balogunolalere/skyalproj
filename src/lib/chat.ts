@@ -4,6 +4,10 @@
  * Ported from the Paberin codebase (src/lib/chat.ts) with Skyal branding and
  * Skyal-specific types. Extracted from the route handler so the exact same
  * code that runs in production is what the unit tests exercise.
+ *
+ * Pricing design (spec): the AI NEVER prices. It extracts a structured
+ * [SPECS] block; the route resolves it against the admin pricing engine and
+ * shows the ENGINE's price. The model has no price tables.
  */
 
 /* ───────────────────────────── Types ───────────────────────────── */
@@ -37,11 +41,53 @@ export interface ChatQuote {
   summary?: string;
 }
 
+/** Structured request extracted by the assistant — NEVER contains a price. */
+export interface ChatSpecs {
+  service_type: string | null;
+  custom_description?: string;
+  material?: string;
+  quantity: number;
+  sla?: 'Standard' | 'Express';
+  delivery?: 'PICKUP' | 'LOCAL_DELIVERY';
+  delivery_address?: string;
+  needs_design_upload?: boolean;
+}
+
+/** Material availability surfaced by the admin pricing engine. */
+export interface Availability {
+  status: 'IN_STOCK' | 'LOW' | 'OUT_OF_STOCK';
+  remaining: number;
+  etaDays?: number;
+}
+
+/** Saved quote snapshot (mirror of the admin GET /api/quotes?phone= row). */
+export interface SavedQuote {
+  id: string;
+  quoteNumber: string;
+  totalAmount: number;
+  discount?: number;
+  deliveryFee?: number;
+  serviceType?: string | null;
+  status: string;
+  expiresAt?: string | null;
+  createdAt: string;
+  requestJson?: string;
+}
+
 export interface ChatResponse {
   assistant_text: string;
   latency_ms?: number;
   quote?: ChatQuote;
   render_order_now?: boolean;
+  /** Engine-extracted specs when no catalog match — UI offers a custom order. */
+  custom?: {
+    description: string;
+    material?: string;
+    quantity: number;
+    sla?: string;
+  };
+  /** Saved quote snapshots for this phone (shown as a banner). */
+  openQuotes?: SavedQuote[];
   sessionId?: string;
   error?: string;
 }
@@ -179,31 +225,137 @@ export function generateSessionId(): string {
   return `skyal_${timestamp}_${random}`;
 }
 
-/* ───────────────────────────── Quote parsing ───────────────────────────── */
+/* ───────────────────────────── Specs parsing ───────────────────────────── */
 
-const QUOTE_REGEX = /\[QUOTE\]\s*([\s\S]*?)\s*\[\/QUOTE\]/;
+const SPECS_REGEX = /\[SPECS\]\s*([\s\S]*?)\s*\[\/SPECS\]/i;
 
-/** Coerce a model-provided value to a finite number (accepts "35,000", "₦35000"). */
-function toNumber(value: unknown): number | undefined {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
-  if (typeof value === 'string' && value.trim() !== '') {
-    const n = Number(value.replace(/[,₦\s]/g, ''));
-    return Number.isFinite(n) ? n : undefined;
+/**
+ * Normalize loosely-formatted model JSON so strict JSON.parse can handle the
+ * common LLM deviations beyond trailing commas:
+ *   - single-quoted strings          ('service_type': 'fabric_buba')
+ *   - unquoted object keys           (service_type: ...)
+ *   - unquoted bare-word values      (service_type: fabric_buba)
+ *
+ * Single left-to-right scan, string-aware (never rewrites text inside quoted
+ * strings), and safe by construction — it cannot throw.
+ */
+function normalizeLooseJson(text: string): string {
+  const out: string[] = [];
+  const n = text.length;
+  let i = 0;
+
+  const isWs = (c: string) => c === ' ' || c === '\t' || c === '\n' || c === '\r';
+  const isIdentStart = (c: string) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c === '_' || c === '$';
+  const isIdentChar = (c: string) => isIdentStart(c) || (c >= '0' && c <= '9');
+  // JSON literals must stay unquoted — quoting them would turn true/false/null
+  // into strings and corrupt booleans like "needs_design_upload": true.
+  const isLiteral = (word: string) => word === 'true' || word === 'false' || word === 'null' || word === 'undefined';
+
+  while (i < n) {
+    const ch = text[i];
+
+    // 1) Strings: double-quoted pass through; single-quoted become double-quoted.
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      out.push('"');
+      i++;
+      while (i < n) {
+        const c = text[i];
+        if (c === '\\' && i + 1 < n) {
+          const next = text[i + 1];
+          // \' is not a valid JSON escape once we switch to double quotes.
+          out.push(quote === "'" && next === "'" ? "'" : c + next);
+          i += 2;
+          continue;
+        }
+        if (c === quote) {
+          i++;
+          break;
+        }
+        // An inner double quote inside a single-quoted string must be escaped.
+        out.push(quote === "'" && c === '"' ? '\\"' : c);
+        i++;
+      }
+      out.push('"'); // unterminated string — close it defensively
+      continue;
+    }
+
+    // 2) `{` or `,`: may start an unquoted key; `,` may be a trailing comma.
+    if (ch === '{' || ch === ',') {
+      if (ch === ',') {
+        // Trailing comma: `,` followed only by whitespace then `}`/`]` is dropped.
+        let j = i + 1;
+        while (j < n && isWs(text[j])) j++;
+        if (j < n && (text[j] === '}' || text[j] === ']')) {
+          i++;
+          continue;
+        }
+      }
+      out.push(ch);
+      i++;
+      let j = i;
+      while (j < n && isWs(text[j])) j++;
+      if (j < n && isIdentStart(text[j])) {
+        let k = j;
+        while (k < n && isIdentChar(text[k])) k++;
+        let l = k;
+        while (l < n && isWs(text[l])) l++;
+        if (l < n && text[l] === ':') {
+          out.push(text.slice(i, j), '"', text.slice(j, k), '"');
+          i = k;
+        }
+      }
+      continue;
+    }
+
+    // 3) `:`: may be followed by an unquoted bare-word value (identifiers /
+    //    plain words, including multi-word phrases like `restore my box`).
+    //    JSON literals (true/false/null) stay unquoted.
+    if (ch === ':') {
+      out.push(ch);
+      i++;
+      let j = i;
+      while (j < n && isWs(text[j])) j++;
+      if (j < n && isIdentStart(text[j])) {
+        let k = j;
+        while (k < n && isIdentChar(text[k])) k++;
+        // Keep consuming whitespace-separated words until a structural
+        // character ({ } [ ] , : " ') — the model often emits phrases.
+        while (k < n && isWs(text[k]) && k + 1 < n && isIdentStart(text[k + 1])) {
+          k++;
+          while (k < n && isIdentChar(text[k])) k++;
+        }
+        let l = k;
+        while (l < n && isWs(text[l])) l++;
+        if (l < n && (text[l] === ',' || text[l] === '}') && !isLiteral(text.slice(j, k))) {
+          out.push(text.slice(i, j), '"', text.slice(j, k), '"');
+          i = k;
+        }
+      }
+      continue;
+    }
+
+    out.push(ch);
+    i++;
   }
-  return undefined;
+
+  return out.join('');
 }
 
 /**
  * Lenient JSON parse for model output: strips markdown code fences
- * (```json ... ```), extracts the first {...} object, and removes trailing
- * commas — the two most common ways LLM JSON output fails strict JSON.parse.
+ * (```json ... ```), extracts the first {...} object, and tolerates the
+ * common LLM deviations from strict JSON — trailing commas, unquoted object
+ * keys, unquoted bare-word string values, and single-quoted strings.
+ * Never throws: anything unparseable returns undefined.
  */
-function parseLenientJson(raw: string): Record<string, unknown> | undefined {
+export function parseLenientJson(raw: string): Record<string, unknown> | undefined {
+  if (typeof raw !== 'string') return undefined;
   let text = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start === -1 || end <= start) return undefined;
-  text = text.slice(start, end + 1).replace(/,\s*([}\]])/g, '$1');
+  text = normalizeLooseJson(text.slice(start, end + 1));
   try {
     const parsed = JSON.parse(text);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
@@ -214,138 +366,58 @@ function parseLenientJson(raw: string): Record<string, unknown> | undefined {
   }
 }
 
+/** Coerce a model-provided value to a positive integer (defaults to 1). */
+function toQuantity(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.round(value);
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value.replace(/[,₦\s]/g, ''));
+    if (Number.isFinite(n) && n > 0) return Math.round(n);
+  }
+  return 1;
+}
+
 /**
- * Parse the structured [QUOTE] block from the assistant text.
- * PRIMARY extraction method — deterministic JSON parsing.
- *
- * The model's arithmetic is cross-checked: when unit_price × quantity and the
- * surcharge components are present and disagree with `total` by more than 10%,
- * the total is recomputed from the components (guards against hallucinated
- * totals). One exception: when `total` ≈ subtotal and the only difference vs
- * the recomputed value is the express/add-on surcharges, the model is treated
- * as having already folded them into the unit price, and `total` is trusted.
+ * Parse the structured [SPECS] block from the assistant text.
+ * The model extracts WHAT the customer wants; the pricing engine decides
+ * WHAT IT COSTS. Returns undefined when no valid [SPECS] block is present.
  */
-export function parseQuoteBlock(text: string): ChatQuote | undefined {
-  const match = text.match(QUOTE_REGEX);
+export function parseSpecsBlock(text: string): ChatSpecs | undefined {
+  const match = text.match(SPECS_REGEX);
   if (!match) return undefined;
 
   const q = parseLenientJson(match[1]);
   if (!q) return undefined;
 
-  const total = toNumber(q.total);
-  if (total === undefined || total <= 0) return undefined;
+  const serviceType =
+    typeof q.service_type === 'string' && q.service_type.trim()
+      ? q.service_type.trim().toLowerCase()
+      : null;
 
-  const quantity = toNumber(q.quantity) ?? 1;
-  const unitPrice = toNumber(q.unit_price);
-  const expressSurcharge = toNumber(q.express_surcharge) ?? 0;
-  const addOnsTotal = toNumber(q.add_ons_total) ?? 0;
-  const deliveryFee = toNumber(q.delivery_fee) ?? 0;
-  const discount = toNumber(q.discount) ?? 0;
-
-  const subtotal = unitPrice !== undefined ? unitPrice * quantity : undefined;
-  const computedTotal =
-    subtotal !== undefined ? subtotal + expressSurcharge + addOnsTotal + deliveryFee - discount : undefined;
-
-  let finalPrice = total;
-  if (computedTotal !== undefined && computedTotal > 0) {
-    const relativeDiff = Math.abs(computedTotal - total) / Math.max(computedTotal, total);
-    // Exception: the model sometimes quotes unit_price ALREADY including the
-    // express surcharge and still lists express_surcharge separately — in that
-    // case total ≈ subtotal while computedTotal = subtotal + surcharges. Trust
-    // the total then, instead of double-counting the surcharge.
-    // (If the model instead FORGOT the surcharge, subtotal and total diverge
-    // by the surcharge amount and the recompute below correctly kicks in.)
-    const expressAlreadyInUnit =
-      subtotal !== undefined &&
-      Math.abs(subtotal - total) <= Math.max(1, subtotal * 0.02) &&
-      Math.abs(computedTotal - total - expressSurcharge - addOnsTotal) <= Math.max(1, subtotal * 0.02);
-    if (relativeDiff > 0.1 && !expressAlreadyInUnit) {
-      finalPrice = computedTotal;
-    }
-  }
-  finalPrice = Math.max(0, Math.round(finalPrice));
-  if (finalPrice <= 0) return undefined;
+  const deliveryRaw = typeof q.delivery === 'string' ? q.delivery.trim().toUpperCase() : '';
+  const delivery = deliveryRaw === 'LOCAL_DELIVERY' || deliveryRaw === 'PICKUP' ? (deliveryRaw as ChatSpecs['delivery']) : undefined;
+  const slaRaw = typeof q.sla === 'string' ? q.sla.trim().toLowerCase() : '';
+  const sla = slaRaw === 'express' ? ('Express' as const) : slaRaw === 'standard' ? ('Standard' as const) : undefined;
 
   return {
-    price: finalPrice,
-    original_price: toNumber(q.original_price),
-    bulk_discount: toNumber(q.bulk_discount),
-    breakdown: {
-      serviceLabel: typeof q.service_label === 'string' ? q.service_label : undefined,
-      serviceType: typeof q.service_type === 'string' ? q.service_type : undefined,
-      sla: typeof q.sla === 'string' ? q.sla : undefined,
-      leadTime: typeof q.lead_time === 'string' ? q.lead_time : undefined,
-      notes: typeof q.notes === 'string' ? q.notes : undefined,
-      basePrice: unitPrice,
-      expressSurcharge,
-      addOnsTotal,
-      discount,
-      deliveryFee,
-      finalPriceNaira: finalPrice,
-      quantity,
-    },
-    summary: `${q.service_label || 'Service'}: ${quantity}× ₦${(unitPrice ?? finalPrice).toLocaleString('en-NG')} = ₦${finalPrice.toLocaleString('en-NG')}. ${q.lead_time || ''}`.trim(),
+    service_type: serviceType,
+    custom_description: typeof q.custom_description === 'string' ? q.custom_description.trim().slice(0, 1000) : undefined,
+    material: typeof q.material === 'string' ? q.material.trim().slice(0, 200) : undefined,
+    quantity: toQuantity(q.quantity),
+    sla,
+    delivery,
+    delivery_address: typeof q.delivery_address === 'string' ? q.delivery_address.trim().slice(0, 500) : undefined,
+    needs_design_upload: q.needs_design_upload === true,
   };
 }
 
 /**
- * FALLBACK: extract a price from free text, used only when no valid
- * [QUOTE] block is present.
- *
- * Requires explicit naira context — a ₦/NGN/N prefix or a "naira"/"NGN"
- * suffix — so phone numbers, dates, and stray digits are never misread as
- * prices ("0803 500 3068" must never become ₦3,068).
- */
-export function extractPriceFromText(text: string): ChatQuote | undefined {
-  const prices = new Set<number>();
-
-  const collect = (regex: RegExp, valueGroup: number, thousandGroup?: number) => {
-    let m: RegExpExecArray | null;
-    while ((m = regex.exec(text)) !== null) {
-      const raw = m[valueGroup];
-      if (raw) {
-        const n = parseFloat(raw.replace(/,/g, ''));
-        if (Number.isFinite(n) && n > 0) prices.add(thousandGroup && m[thousandGroup] ? n * 1000 : n);
-      }
-      if (m.index === regex.lastIndex) regex.lastIndex++;
-    }
-  };
-
-  // Prefix form: ₦15,000 / N15,000 / NGN 15,000 / ₦20K
-  // NOTE: no case-insensitive flag — a lowercase "n" prefix ("n15000") is
-  // not naira notation and would cause false positives.
-  collect(/(?<![A-Za-z0-9₦])(?:₦|NGN|N)\s*(\d[\d,]*(?:\.\d+)?)\s*([kK])?/g, 1, 2);
-  // Suffix form: 15,000 naira / 15000naira / 20K naira
-  collect(/(\d[\d,]*(?:\.\d+)?)\s*([kK])?\s*(?:naira|NGN)\b/gi, 1, 2);
-
-  if (prices.size === 0) return undefined;
-
-  let bestPrice = 0;
-  prices.forEach((price) => {
-    if (price > bestPrice) bestPrice = price;
-  });
-  return {
-    price: bestPrice,
-    original_price: undefined,
-    bulk_discount: undefined,
-    breakdown: undefined,
-    summary: `Estimated price: ₦${bestPrice.toLocaleString('en-NG')}`,
-  };
-}
-
-/** Full extraction pipeline: structured [QUOTE] first, regex fallback. */
-export function extractQuote(text: string): ChatQuote | undefined {
-  return parseQuoteBlock(text) ?? extractPriceFromText(text);
-}
-
-/**
- * Strip [QUOTE] blocks (and any markdown-fenced JSON leftovers) from the
+ * Strip [SPECS] blocks (and any markdown-fenced JSON leftovers) from the
  * assistant text for clean display.
  */
 export function cleanAssistantText(text: string): string {
   return text
-    .replace(/\[QUOTE\][\s\S]*?\[\/QUOTE\]/g, '')
-    .replace(/```(?:json)?\s*\{[\s\S]*?\}\s*```/g, '')
+    .replace(/\[SPECS\][\s\S]*?\[\/SPECS\]/gi, '')
+    .replace(/```(?:json)?\s*\{[\s\S]*?\}\s*```/gi, '')
     .trim();
 }
 
@@ -402,3 +474,102 @@ export function sanitizeHistory(history: unknown, maxTurns = 50, maxLen = 4000):
       content: m.content.trim().slice(0, maxLen),
     }));
 }
+
+/* ───────────────────────────── System prompt ───────────────────────────── */
+
+/**
+ * The full system prompt for the assistant. Kept here (not in the route) so
+ * tests can assert the prompt contract directly and the dataset generator
+ * can load it live from src/lib/chat.ts.
+ *
+ * PRICING CONTRACT: the model never states a price and never receives a price
+ * list. It extracts [SPECS]; the route computes the exact price with the
+ * admin pricing engine and appends it to the reply.
+ */
+export const SKYAL_SYSTEM_PROMPT = `You are Skyal's AI Assistant — the friendly, knowledgeable voice of Skyal Laser Services, a precision laser cutting business in Ogba, Ikeja, Lagos, Nigeria.
+
+# YOUR IDENTITY
+- You represent Skyal Laser Services (sister brand to Paberin Creations)
+- You help customers with laser cutting, engraving, sheet cutting, metal cutting, and cake toppers
+- Your tone: warm, professional, Nigerian-friendly. Use "ma" / "sir" respectfully.
+- Be honest about limitations. When you can't do something, explain why.
+
+# WHAT YOU DO
+You turn a customer's request into a structured order. You NEVER quote prices —
+the system computes the exact price and shows it to the customer automatically.
+
+# WHAT WE DO (categories)
+- FABRIC LASER CUTTING — customer brings the fabric (aso-ebi, buba, wrapper, skirt, gown, sleeves, boubou, jeans, ankara, lace, per-yard, custom sections)
+- ENGRAVING — customer brings the item (phone backs, jewelry, leather, wood items, necklaces, badges, small items, curved surfaces, in-house metal engraving)
+- SHEET CUTTING — acrylic / wood / mirror (in-house 900×600mm bed; 8ft×4ft sheets via external partner, 10 working days, no express)
+- METAL CUTTING — always via external partner, 10 working days, no express
+- CAKE TOPPERS — acrylic, custom (5–7 days)
+- ACRYLIC STICKS — sticks/straws for toppers, signage, floral
+- ADD-ONS — stoning board
+
+# KEY RULES
+- Express = faster turnaround with a surcharge. NOT available for: engraving, complex custom gowns, external-partner sheet/metal work. Minimum 48 hours.
+- Lead time counts from PAYMENT confirmation, not from order placement.
+- Full payment before production starts. No deposit/balance system.
+- NO VAT on any service.
+- LANGUAGE: Always respond in the customer's language — Nigerian English or Pidgin English — never in any other language. Even when conversation context is lost or unclear, keep responding in Nigerian English/Pidgin — never switch to another language (never Chinese, never any other language).
+- Machine bed: 900mm × 600mm in-house. Larger items → external partner.
+
+# DELIVERY
+- FREE pickup from Ogba, Ikeja, Lagos
+- Local Lagos delivery (fee applies)
+- Nationwide waybill (fee applies)
+
+# WHAT YOU SHOULD DO
+1. Understand what the customer wants (garment, engraving, sheet, topper, sticks, metal).
+2. Extract the exact spec: the item/garment, the MATERIAL, the QUANTITY, SLA preference (Standard/Express) if they mention a rush, and the DELIVERY method (pickup or local delivery + address).
+3. If details are missing, ask clarifying questions — do NOT guess material, quantity, or delivery.
+4. When the spec is complete, END your response with a [SPECS] block (see below).
+5. If the job clearly matches a catalog category (fabric garment, engraving item, topper, sheet, sticks, metal), set "service_type" to the closest catalog type key. Use the type keys EXACTLY as listed:
+   - Fabric: fabric_sleeves, fabric_buba, fabric_buba_layer, fabric_wrapper, fabric_skirt, fabric_blouse_skirt, fabric_buba_wrapper, fabric_boubou, fabric_sleeves_wrapper, fabric_sleeves_buba, fabric_per_yard, fabric_custom (custom fabric job), fabric_complex_gown
+   - Engraving: engraving_phone, engraving_jewelry, engraving_leather, engraving_wood, engraving_small_item, engraving_curved, engraving_detective_badge, engraving_necklace, metal_engraving_inhouse
+   - Sheets: sheet_cutting_inhouse, sheet_cutting_oversize, sheet_cutting_8x4, sheet_cutting_custom
+   - Sticks: acrylic_stick_cutting
+   - Metal cutting: metal_cutting_external
+   - Toppers: skyal_topper_acrylic, skyal_topper_custom
+   - Add-on: stoning_board
+6. If the job does NOT clearly match any of those types (e.g. "cut my jeans into a pattern" — that's custom fabric work, so fabric_custom), set "service_type" to null and describe it in "custom_description" instead. Never force a wrong type.
+7. If the customer asks for a price, answer: "Let me confirm the exact price for you" and emit the [SPECS] block — the system shows the exact price.
+
+# HANDLING AMBIGUOUS / VAGUE QUERIES
+- **"I need something for my wedding/event"** → Ask: What type of item? Fabric cutting for aso-ebi? Cake topper? Signage? Then narrow down.
+- **"How much for cutting?"** → Ask: What material? Fabric, leather, wood, or acrylic? What garment/item? How many?
+- **"What can you do for me?"** → List the categories briefly and ask which interests them.
+- **"Price?" / "How much?"** → Ask what they want; then extract specs and let the system show the exact price.
+- **Pidgin / mixed language** → Understand and respond naturally. Be conversational but professional.
+- **"Is it cheaper than [competitor]?"** → Don't compare prices. Say: "I'll confirm our exact price for your job." then extract specs.
+- **"Last price?" / "Can you do better?"** → Prices are fixed and computed automatically; you cannot discount.
+- **Multiple items at once** → Ask which item to quote first, or extract the primary one.
+- **Just "Ok" / "Yes" / "Proceed"** → If specs were just extracted, confirm and guide them to place the order. If no specs yet, ask what they're confirming.
+- **Off-topic / unrelated** → Politely redirect to laser cutting/engraving services.
+
+# NIGERIAN CONTEXT
+- Understand local terms: aso-ebi, buba, wrapper, iro, gele, boubou, agbada
+- Understand pidgin: "abeg", "how far", "e go cost", "na how much", "shey you fit"
+- Understand local measurements: inches, feet, yards (not cm/metres for fabric)
+- Understand local events: weddings, owambe, burials, birthdays, naming ceremonies
+
+# RESPONSE FORMAT
+Always respond conversationally first, then if you've extracted the full spec, add this EXACT block at the END:
+
+[SPECS]
+{
+  "service_type": "<catalog type key> or null",
+  "custom_description": "<the customer's job in their own words, only when service_type is null>",
+  "material": "<material if known>",
+  "quantity": <number>,
+  "sla": "Standard" or "Express" (omit if not discussed),
+  "delivery": "PICKUP" or "LOCAL_DELIVERY" (omit if not discussed),
+  "delivery_address": "<address, only when delivery is LOCAL_DELIVERY>",
+  "needs_design_upload": true or false
+}
+[/SPECS]
+
+IMPORTANT: the [SPECS] JSON must be plain text — NEVER wrap it in markdown code fences (triple backticks), NEVER add trailing commas, and NEVER include any price or amount anywhere in the block.
+
+If the spec is NOT complete yet (missing info), NEVER output a [SPECS] block — instead ask clarifying questions.`;

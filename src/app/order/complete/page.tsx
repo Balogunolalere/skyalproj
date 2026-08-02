@@ -128,15 +128,28 @@ export default function OrderCompletePage() {
   const displayOrder = orderNumber || 'unknown';
   const total = orderDetails?.totalAmount ? formatNaira(orderDetails.totalAmount) : '₦...';
   const service = orderDetails?.serviceLabel || orderDetails?.serviceType || 'Your order';
-  const customerName = orderDetails?.customerName || '';
-  const customerEmail = orderDetails?.customerEmail || '';
-  const customerPhone = orderDetails?.customerPhone || '';
+  // The tracking endpoint no longer returns customer PII — fall back to the
+  // customer's own device-stored profile for the receipt display.
+  let storedCustomer: { name?: string; email?: string; phone?: string } = {};
+  try {
+    const raw = localStorage.getItem('skyal_customer');
+    if (raw) storedCustomer = JSON.parse(raw) || {};
+  } catch {
+    // ignore
+  }
+  const customerName = orderDetails?.customerName || storedCustomer.name || '';
+  const customerEmail = orderDetails?.customerEmail || storedCustomer.email || '';
+  const customerPhone = orderDetails?.customerPhone || storedCustomer.phone || '';
   const createdAt = orderDetails?.createdAt || new Date().toISOString();
 
   // Generate and print receipt (opens browser print dialog → save as PDF)
+  // NOTE: customer values may come from localStorage — escape before
+  // interpolating into the print window's HTML.
+  const esc = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const printReceipt = () => {
     const receiptHTML = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Receipt ${displayOrder}</title>
+<html><head><meta charset="UTF-8"><title>Receipt ${esc(displayOrder)}</title>
 <style>
   body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 400px; margin: 40px auto; padding: 20px; color: #1a1a1a; }
   h1 { font-size: 20px; margin-bottom: 4px; }
@@ -151,14 +164,14 @@ export default function OrderCompletePage() {
 <h1>Skyal Laser Services</h1>
 <div class="brand">ORDER RECEIPT</div>
 <table>
-<tr><td>Order Number</td><td style="font-family:monospace">${displayOrder}</td></tr>
-<tr><td>Service</td><td>${service}</td></tr>
-<tr><td>Customer</td><td>${customerName || '—'}</td></tr>
-<tr><td>Phone</td><td>${customerPhone || '—'}</td></tr>
-<tr><td>Email</td><td>${customerEmail || '—'}</td></tr>
-<tr><td>Date</td><td>${new Date(createdAt).toLocaleDateString('en-NG', { year: 'numeric', month: 'long', day: 'numeric' })}</td></tr>
+<tr><td>Order Number</td><td style="font-family:monospace">${esc(displayOrder)}</td></tr>
+<tr><td>Service</td><td>${esc(service)}</td></tr>
+<tr><td>Customer</td><td>${esc(customerName) || '—'}</td></tr>
+<tr><td>Phone</td><td>${esc(customerPhone) || '—'}</td></tr>
+<tr><td>Email</td><td>${esc(customerEmail) || '—'}</td></tr>
+<tr><td>Date</td><td>${esc(new Date(createdAt).toLocaleDateString('en-NG', { year: 'numeric', month: 'long', day: 'numeric' }))}</td></tr>
 <tr><td>Status</td><td style="color:#16a34a;font-weight:600">PAID</td></tr>
-<tr class="total"><td>Total</td><td>${total}</td></tr>
+<tr class="total"><td>Total</td><td>${esc(total)}</td></tr>
 </table>
 <div class="footer">Thank you for your order!<br>Skyal Laser Services · Wempco Rd, Ogba, Ikeja, Lagos</div>
 </body></html>`;
