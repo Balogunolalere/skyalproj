@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { ArrowLeft, ArrowRight, Check, Upload, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
@@ -135,6 +135,10 @@ export default function OrderView({
   const [sla, setSla] = useState<"Standard" | "Express">("Standard");
   const [delivery, setDelivery] = useState("pickup");
   const [address, setAddress] = useState("");
+  // Live mirror of `address` for effects that run once on mount (so an async
+  // saved-address fetch never overwrites an address set by another effect).
+  const addressRef = useRef(address);
+  addressRef.current = address;
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [referral, setReferral] = useState("");
   const [name, setName] = useState("");
@@ -225,7 +229,20 @@ export default function OrderView({
         const data = await res.json();
         if (res.ok) {
           const payload = data.data || data;
-          setSavedAddresses(payload?.addresses || []);
+          const list = payload?.addresses || [];
+          setSavedAddresses(list);
+          // Auto-fill the delivery address with the default (or most recent) saved
+          // address — the customer shouldn't re-type what they've saved before.
+          if (list.length > 0 && !addressRef.current.trim()) {
+            const preferred = list.find((a: SavedAddress) => a.isDefault) || list[0];
+            if (preferred) {
+              setAddress(
+                [preferred.address, preferred.city, preferred.state, preferred.landmark]
+                  .filter(Boolean)
+                  .join(", "),
+              );
+            }
+          }
         }
       } catch {
         // swallow — picker just stays empty
