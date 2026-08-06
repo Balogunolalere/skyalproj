@@ -21,6 +21,7 @@ interface OrderData {
   sla: string;
   deliveryMethod: string | null;
   deliveryAddress: string | null;
+  designFileUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -194,6 +195,31 @@ export default function TrackView({
             </div>
           </div>
 
+          {/* Design files uploaded with the order */}
+          {order.designFileUrl && (
+            <div className="bg-vellum border border-hairline p-6">
+              <Coord>DESIGN FILES</Coord>
+              <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {parseDesignFiles(order.designFileUrl).map((f, i) => (
+                  <a
+                    key={i}
+                    href={f.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="border border-hairline p-3 flex flex-col gap-2 hover:border-laser transition-colors group"
+                  >
+                    <span className="text-xs text-ink font-medium break-all line-clamp-2">
+                      {f.name || `Design file ${i + 1}`}
+                    </span>
+                    <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-laser group-hover:underline">
+                      Open file ↗
+                    </span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Timeline */}
           {idx >= 0 && !isCancelled && (
             <div className="bg-vellum border border-hairline p-6 sm:p-8">
@@ -276,4 +302,15 @@ function Meta({ k, v }: { k: string; v: string }) {
       <div className="text-sm text-ink">{v}</div>
     </div>
   );
+}
+
+/** Parse designFileUrl (JSON array from the order create flow; fallback = single URL). */
+function parseDesignFiles(raw: string): { url: string; name?: string; publicId?: string }[] {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return [{ url: raw }];
+  } catch {
+    return [{ url: raw }];
+  }
 }

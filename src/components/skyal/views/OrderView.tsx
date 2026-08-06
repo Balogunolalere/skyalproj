@@ -8,8 +8,14 @@ import { toast } from 'sonner';
 import { buildChatOrderNotes } from "@/lib/chat-order";
 import type { ChatSpecs, Availability } from "@/lib/chat";
 import { AvailabilityLine } from "../AvailabilityLine";
+import { AddressPicker } from "./AddressPicker";
 
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
+
+/* ── Upload limits (shared by the file picker and the submit path) ── */
+const MAX_FILES = 5;
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB each
+const MAX_TOTAL_SIZE = 25 * 1024 * 1024; // 25MB total
 
 /* ── Real admin API types (mirror the admin /api/services response) ── */
 interface Service {
@@ -129,6 +135,7 @@ export default function OrderView({
   const [sla, setSla] = useState<"Standard" | "Express">("Standard");
   const [delivery, setDelivery] = useState("pickup");
   const [address, setAddress] = useState("");
+  const [quoteError, setQuoteError] = useState<string | null>(null);
   const [referral, setReferral] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -367,6 +374,7 @@ export default function OrderView({
     if (!serviceType || !service || step < 1) return;
     let cancelled = false;
     setQuoteLoading(true);
+    setQuoteError(null);
     const t = setTimeout(async () => {
       try {
         // Include the customer phone (when known) so the admin persists a
@@ -389,6 +397,9 @@ export default function OrderView({
             sla,
             deliveryMethod: delivOption?.apiMethod,
             referralCode: referral || undefined,
+            // Send the address so the server verifies it (Mapbox geocoding)
+            // and prices delivery exactly instead of a hardcoded fee.
+            ...(delivery !== "pickup" && address.trim().length >= 5 ? { deliveryAddress: address.trim() } : {}),
             ...(custPhone ? { customerPhone: custPhone } : {}),
           }),
         });
@@ -396,8 +407,11 @@ export default function OrderView({
         if (cancelled) return;
         if (res.ok) {
           setQuote(data.data || data);
+          setQuoteError(null);
         } else {
           setQuote(null);
+          const errMsg = data?.error?.message;
+          if (errMsg) setQuoteError(errMsg);
         }
       } catch {
         if (!cancelled) setQuote(null);
@@ -409,7 +423,7 @@ export default function OrderView({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [serviceType, qty, sla, delivery, referral, service, step, delivOption]);
+  }, [serviceType, qty, sla, delivery, referral, service, step, delivOption, address]);
 
   /* ── Group services by category for the picker ── */
   const servicesByCategory = useMemo(() => {
@@ -448,11 +462,7 @@ export default function OrderView({
     setSubmitError(null);
     try {
       // Step 0: Upload design files to Cloudinary if present (best-effort, non-blocking)
-      // Max 5 files, 10MB each, 25MB total
-      const MAX_FILES = 5;
-      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-      const MAX_TOTAL_SIZE = 25 * 1024 * 1024; // 25MB
-
+      // Max 5 files, 10MB each, 25MB total (limits hoisted to module scope)
       const uploadedFiles: { url: string; publicId: string; name: string }[] = [];
       const uploadErrors: string[] = [];
 
@@ -517,16 +527,14 @@ export default function OrderView({
         deliveryMethod: delivOption?.apiMethod,
       };
       if (delivery !== "pickup") basePayload.deliveryAddress = address.trim();
+      if (referral) basePayload.referralCode = referral.trim();
       if (designFileUrl) {
         basePayload.designFileUrl = designFileUrl;
         basePayload.designFilePublicId = designFilePublicId;
       }
-      const noteParts: string[] = [notes].filter(Boolean);
-      if (referral) noteParts.push(`Referral: ${referral}`);
-      if (uploadFiles.length > 0) {
-        noteParts.push(`--- Design files: ${uploadFiles.map(f => f.name).join(', ')} ---`);
-      }
-      if (noteParts.length) basePayload.customerNotes = noteParts.join('\n');
+      // Customer notes contain ONLY the notes — design file names travel in
+      // designFileUrl and the referral code travels as referralCode.
+      if (notes.trim()) basePayload.customerNotes = notes.trim();
 
       const payload: Record<string, unknown> = customMode
         ? {
@@ -1021,26 +1029,37 @@ export default function OrderView({
                       multiple
                       className="hidden"
                       onChange={(e) => {
-                        const selectedFiles = Array.from(e.target.files || []);
-                        if (selectedFiles.length === 0) { setUploadFiles([]); return; }
-                        if (selectedFiles.length > 5) {
-                          alert('Maximum 5 files allowed.');
+                        const input = e.target;
+                        const selectedFiles = Array.from(input.files || []);
+                        // Picker cancelled — keep the files already selected.
+                        if (selectedFiles.length === 0) return;
+                        // Per-file size check at selection time.
+                        const okFiles = selectedFiles.filter((f) => f.size <= MAX_FILE_SIZE);
+                        const skipped = selectedFiles.length - okFiles.length;
+                        if (skipped > 0) {
+                          alert(`${skipped} file${skipped > 1 ? 's' : ''} skipped — max 10MB each.`);
+                        }
+                        if (okFiles.length === 0) return;
+                        // Enforce the total cap against files ALREADY selected.
+                        if (uploadFiles.length + okFiles.length > MAX_FILES) {
+                          alert(`Maximum ${MAX_FILES} files allowed. Remove some before adding more.`);
                           return;
                         }
-                        // Read all files as base64
-                        const newFiles: { name: string; data: string }[] = [];
+                        // Read the new batch as base64, then APPEND it to the
+                        // existing selection (previously this REPLACED the list,
+                        // so adding files after the first pick lost earlier ones).
+                        const pending = okFiles.length;
                         let loaded = 0;
-                        for (const file of selectedFiles) {
-                          if (file.size > 10 * 1024 * 1024) {
-                            alert(`${file.name} exceeds the 10MB limit.`);
-                            continue;
-                          }
+                        const newFiles: { name: string; data: string }[] = [];
+                        for (const file of okFiles) {
                           const reader = new FileReader();
                           reader.onload = () => {
                             newFiles.push({ name: file.name, data: reader.result as string });
                             loaded++;
-                            if (loaded === selectedFiles.length || loaded === newFiles.length) {
-                              setUploadFiles([...newFiles]);
+                            if (loaded === pending) {
+                              setUploadFiles((prev) => [...prev, ...newFiles]);
+                              // Reset the input so the same file can be re-picked later.
+                              input.value = "";
                             }
                           };
                           reader.readAsDataURL(file);
@@ -1132,15 +1151,19 @@ export default function OrderView({
                     </div>
                   )}
                   <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
-                    Delivery address
+                    Delivery address <span className="lowercase">(search or click the map)</span>
                   </label>
-                  <textarea
+                  <AddressPicker
+                    token={process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ""}
                     value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    rows={2}
-                    placeholder="Street, area, city, state"
-                    className="mt-2 w-full bg-bone border border-hairline px-4 py-3 text-sm text-ink focus:border-laser outline-none resize-none"
+                    onChange={setAddress}
                   />
+                  {quoteError && (
+                    <p className="mt-2 text-sm text-oxblood flex items-start gap-1.5" role="alert">
+                      <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                      <span>{quoteError}</span>
+                    </p>
+                  )}
                 </div>
               )}
               <div className="mt-6">

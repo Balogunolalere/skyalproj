@@ -87,6 +87,7 @@ interface Order {
   deliveryMethod: string | null;
   createdAt: string;
   updatedAt: string;
+  designFileUrl?: string | null;
 }
 
 interface TimelineEntry {
@@ -1405,6 +1406,31 @@ export default function DashboardView({
                     )}
                   </dl>
 
+                  {/* Design files uploaded with the order */}
+                  {(detailData?.designFileUrl || detailOrder.designFileUrl) && (
+                    <div className="mt-6 bg-vellum border border-hairline p-5">
+                      <Coord>DESIGN FILES</Coord>
+                      <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        {parseDesignFiles(detailData?.designFileUrl || detailOrder.designFileUrl || "").map((f, i) => (
+                          <a
+                            key={i}
+                            href={f.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="border border-hairline p-3 flex flex-col gap-2 hover:border-laser transition-colors group"
+                          >
+                            <span className="text-xs text-ink font-medium break-all line-clamp-2">
+                              {f.name || `Design file ${i + 1}`}
+                            </span>
+                            <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-laser group-hover:underline">
+                              Open file ↗
+                            </span>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* QUOTING banner — unpriced custom job awaiting the team */}
                   {(detailData?.state || detailOrder.state) === "QUOTING" && (
                     <div className="mt-6 bg-vellum border border-laser/30 p-4">
@@ -1825,4 +1851,15 @@ function DetailItem({ k, v }: { k: string; v: string }) {
       <dd className="text-sm text-ink break-words">{v}</dd>
     </div>
   );
+}
+
+/** Parse designFileUrl (JSON array from the order create flow; fallback = single URL). */
+function parseDesignFiles(raw: string): { url: string; name?: string; publicId?: string }[] {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return [{ url: raw }];
+  } catch {
+    return [{ url: raw }];
+  }
 }
