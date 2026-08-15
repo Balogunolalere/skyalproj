@@ -14,6 +14,7 @@
 import { describe, expect, test, vi, beforeAll, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import type { ChatResponse } from '@/lib/chat'
+import { defaultPickupISO, isValidPickupISO } from '@/lib/order'
 
 // Must be set BEFORE the route module is imported (config is read at module load)
 process.env.AGNES_API_KEY = 'test-key'
@@ -237,6 +238,48 @@ describe('POST /api/chat — engine pricing happy path', () => {
     const { body } = await send({ ...mkBody('Two pairs of sleeves please'), customerPhone: '08035003068' })
     expect(body.quote?.price).toBe(40000)
     expect(engineBody.customerPhone).toBe('08035003068')
+  })
+
+  test('should default requestedPickupTime to a sane future pickup when the spec has none', async () => {
+    const content = `Wood engraving tray:
+[SPECS]
+{"service_type":"engraving_wood","quantity":1,"delivery":"PICKUP"}
+[/SPECS]`
+    let engineBody: any = null
+    mockFetch(
+      () => jsonResponse(agnesCompletion(content)),
+      (init) => {
+        engineBody = JSON.parse(String(init?.body))
+        return engineQuote(7500, 'engraving_wood', 'Standard', 1)
+      }
+    )
+
+    const { body } = await send(mkBody('Engrave my wooden keepsake tray please'))
+    expect(body.quote?.price).toBe(7500)
+    expect(typeof engineBody.requestedPickupTime).toBe('string')
+    // The default must satisfy the same rules the backend enforces —
+    // no REQUESTED_PICKUP_REQUIRED / INVALID_PICKUP_TIME from the engine.
+    expect(isValidPickupISO(engineBody.requestedPickupTime)).toBe(true)
+  })
+
+  test('should pass through a valid pickup time extracted from the spec', async () => {
+    const pickup = defaultPickupISO()
+    const content = `Wood engraving tray:
+[SPECS]
+{"service_type":"engraving_wood","quantity":1,"delivery":"PICKUP","requested_pickup_time":"${pickup}"}
+[/SPECS]`
+    let engineBody: any = null
+    mockFetch(
+      () => jsonResponse(agnesCompletion(content)),
+      (init) => {
+        engineBody = JSON.parse(String(init?.body))
+        return engineQuote(7500, 'engraving_wood', 'Standard', 1)
+      }
+    )
+
+    const { body } = await send(mkBody('Engrave my wooden keepsake tray by the deadline'))
+    expect(body.quote?.price).toBe(7500)
+    expect(engineBody.requestedPickupTime).toBe(pickup)
   })
 
   test('should return the custom flag for a bespoke job (no catalog match)', async () => {

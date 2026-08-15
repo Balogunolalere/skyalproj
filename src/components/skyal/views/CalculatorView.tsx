@@ -4,6 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { ArrowRight, Loader2, AlertCircle } from "lucide-react";
+import {
+  buildQuotePayload,
+  isValidPickupISO,
+  missingRequiredOptionFields,
+  type OptionField,
+} from "@/lib/order";
+import { OptionFieldsBlock, RequiredOptionsHint } from "../OptionFieldsBlock";
+import { PickupDateTimePicker } from "../PickupDateTimePicker";
 
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
@@ -21,6 +29,10 @@ interface Service {
   expressLeadTime: string | null;
   allowExpress: boolean;
   expressSurchargePct: number;
+  /** Legacy flat variant list (may be empty). */
+  options?: string[];
+  /** Structured option fields (Django-style). */
+  optionFields?: OptionField[] | null;
 }
 
 interface QuoteBreakdown {
@@ -75,6 +87,11 @@ export default function CalculatorView({
   const [quantity, setQuantity] = useState(1);
   const [sla, setSla] = useState<Sla>("Standard");
   const [delivery, setDelivery] = useState<DeliveryOption>("");
+  // Required by the backend quote engine.
+  const [requestedPickupTime, setRequestedPickupTime] = useState("");
+  // Service options (structured wins over legacy — never both).
+  const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({});
+  const [selectedVariant, setSelectedVariant] = useState("");
 
   const [breakdown, setBreakdown] = useState<QuoteBreakdown | null>(null);
   const [total, setTotal] = useState<number | null>(null);
@@ -130,6 +147,19 @@ export default function CalculatorView({
       setQuoteError("Pick a service first.");
       return;
     }
+    if (!requestedPickupTime || !isValidPickupISO(requestedPickupTime)) {
+      setQuoteError(
+        "Pick a future weekday pickup time (Mon–Fri, 09:00–18:00 Lagos) first.",
+      );
+      return;
+    }
+    const missing = selectedService?.optionFields
+      ? missingRequiredOptionFields(selectedService.optionFields, selectedOptions)
+      : [];
+    if (missing.length > 0) {
+      setQuoteError(`Required options: ${missing.join(", ")}`);
+      return;
+    }
     setQuoteLoading(true);
     setQuoteError(null);
     setSearched(true);
@@ -137,13 +167,18 @@ export default function CalculatorView({
       const res = await fetch(`${API_URL}/api/services/quote`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          brand: "SKYAL",
-          serviceType,
-          quantity: Math.max(1, quantity || 1),
-          sla,
-          ...buildDeliveryBody(delivery),
-        }),
+        body: JSON.stringify(
+          buildQuotePayload({
+            serviceType,
+            quantity: Math.max(1, quantity || 1),
+            sla,
+            requestedPickupTime,
+            selectedVariant: selectedVariant || undefined,
+            selectedOptions:
+              Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
+            ...buildDeliveryBody(delivery),
+          }),
+        ),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -207,7 +242,12 @@ export default function CalculatorView({
                 <select
                   id="serviceType"
                   value={serviceType}
-                  onChange={(e) => setServiceType(e.target.value)}
+                  onChange={(e) => {
+                    setServiceType(e.target.value);
+                    // Options are per-service — reset the previous selection.
+                    setSelectedOptions({});
+                    setSelectedVariant("");
+                  }}
                   className="w-full bg-bone border border-hairline px-4 py-3 text-sm text-ink focus:border-laser outline-none"
                 >
                   {services.map((s) => (
@@ -227,6 +267,32 @@ export default function CalculatorView({
                   Minimum order: {formatNaira(selectedService.minPriceNaira)}
                 </p>
               ) : null}
+              {selectedService &&
+                ((selectedService.optionFields?.length ?? 0) > 0 ||
+                  (selectedService.options?.length ?? 0) > 0) && (
+                  <div className="mt-3 space-y-1">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
+                      Options
+                    </span>
+                    <OptionFieldsBlock
+                      service={selectedService}
+                      values={selectedOptions}
+                      onChange={setSelectedOptions}
+                      variant={selectedVariant}
+                      onVariantChange={setSelectedVariant}
+                    />
+                    <RequiredOptionsHint
+                      missing={
+                        selectedService.optionFields
+                          ? missingRequiredOptionFields(
+                              selectedService.optionFields,
+                              selectedOptions,
+                            )
+                          : []
+                      }
+                    />
+                  </div>
+                )}
             </div>
 
             {/* Quantity */}
@@ -295,15 +361,27 @@ export default function CalculatorView({
               </div>
               {selectedService?.expressSurchargePct ? (
                 <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-thread mt-1">
-                  Express adds +{selectedService.expressSurchargePct}% surcharge
+                  Express pricing is based on your pickup time — closer pickups cost more.
                 </p>
               ) : null}
+            </div>
+
+            {/* Pickup time */}
+            <div className="space-y-2">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
+                <span className="text-laser">04</span> Pickup date &amp; time{" "}
+                <span className="text-laser">*</span>
+              </span>
+              <PickupDateTimePicker
+                value={requestedPickupTime}
+                onChange={setRequestedPickupTime}
+              />
             </div>
 
             {/* Delivery */}
             <div className="space-y-2">
               <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
-                <span className="text-laser">04</span> Delivery{" "}
+                <span className="text-laser">05</span> Delivery{" "}
                 <span className="normal-case tracking-normal text-thread/70">(optional)</span>
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

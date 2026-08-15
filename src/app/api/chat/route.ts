@@ -12,6 +12,7 @@ import {
   type ChatSpecs,
   type ChatResponse,
 } from "@/lib/chat";
+import { defaultPickupISO } from "@/lib/order";
 
 export const runtime = "nodejs";
 // Vercel function duration — required so slow Agnes calls (20-45s) aren't
@@ -103,6 +104,9 @@ async function callAdminQuote(specs: ChatSpecs, customerPhone?: string): Promise
     sla: specs.sla || 'Standard',
     deliveryMethod: specs.delivery,
     deliveryAddress: specs.delivery === 'LOCAL_DELIVERY' ? specs.delivery_address : undefined,
+    // The engine rejects quotes without a pickup time — when the customer
+    // never gave a deadline, default to now + 2 working days at 17:00 Lagos.
+    requestedPickupTime: specs.requested_pickup_time || defaultPickupISO(),
     ...(customerPhone ? { customerPhone } : {}),
   };
   const res = await retryWithBackoff(

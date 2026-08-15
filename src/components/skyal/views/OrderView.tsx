@@ -7,8 +7,20 @@ import { ArrowLeft, ArrowRight, Check, Upload, Loader2, CheckCircle2, AlertCircl
 import { toast } from 'sonner';
 import { buildChatOrderNotes } from "@/lib/chat-order";
 import type { ChatSpecs, Availability } from "@/lib/chat";
+import {
+  buildOrderPayload,
+  buildQuotePayload,
+  formatPickupISO,
+  isValidNigerianPhone,
+  isValidPickupISO,
+  missingRequiredOptionFields,
+  pickupTierPct,
+  type OptionField,
+} from "@/lib/order";
 import { AvailabilityLine } from "../AvailabilityLine";
 import { AddressPicker } from "./AddressPicker";
+import { OptionFieldsBlock, RequiredOptionsHint } from "../OptionFieldsBlock";
+import { PickupDateTimePicker } from "../PickupDateTimePicker";
 
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
@@ -32,6 +44,10 @@ interface Service {
   expressLeadTime: string | null;
   allowExpress: boolean;
   expressSurchargePct: number;
+  /** Legacy flat variant list (may be empty). */
+  options?: string[];
+  /** Structured option fields (Django-style). */
+  optionFields?: OptionField[] | null;
 }
 
 interface QuoteBreakdown {
@@ -89,9 +105,10 @@ function fullSavedAddress(a: SavedAddress): string {
 const STEPS = [
   { n: "01", label: "Service" },
   { n: "02", label: "Details" },
-  { n: "03", label: "Delivery" },
-  { n: "04", label: "Customer" },
-  { n: "05", label: "Review" },
+  { n: "03", label: "Pickup" },
+  { n: "04", label: "Delivery" },
+  { n: "05", label: "Customer" },
+  { n: "06", label: "Review" },
 ] as const;
 
 const DELIVERY_OPTIONS = [
@@ -133,6 +150,12 @@ export default function OrderView({
   const [serviceType, setServiceType] = useState<string>("");
   const [qty, setQty] = useState(1);
   const [sla, setSla] = useState<"Standard" | "Express">("Standard");
+  // Required by the backend: ISO string, future weekday 09:00–18:00 Lagos.
+  const [requestedPickupTime, setRequestedPickupTime] = useState("");
+  // Service options: structured `optionFields` (key → string value) win over
+  // the legacy flat `options` dropdown — never send both for one service.
+  const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({});
+  const [selectedVariant, setSelectedVariant] = useState("");
   const [delivery, setDelivery] = useState("pickup");
   const [address, setAddress] = useState("");
   // Live mirror of `address` for effects that run once on mount (so an async
@@ -194,6 +217,11 @@ export default function OrderView({
         const notesText = buildChatOrderNotes(specs, context);
         if (notesText) setNotes(notesText);
       }
+    }
+    // A pickup time the chat assistant extracted is carried through (validated
+    // against the same backend rules the picker enforces).
+    if (specs?.requested_pickup_time && isValidPickupISO(specs.requested_pickup_time)) {
+      setRequestedPickupTime(specs.requested_pickup_time);
     }
     setStep(1);
     setChatPrefillApplied(true);
@@ -394,6 +422,16 @@ export default function OrderView({
     setQuoteError(null);
     const t = setTimeout(async () => {
       try {
+        // The engine rejects quotes without a valid pickup time
+        // (REQUESTED_PICKUP_REQUIRED) — hold the quote until the customer has
+        // picked one, so the sidebar never flashes that error mid-flow.
+        if (!requestedPickupTime || !isValidPickupISO(requestedPickupTime)) {
+          if (!cancelled) {
+            setQuote(null);
+            setQuoteLoading(false);
+          }
+          return;
+        }
         // Include the customer phone (when known) so the admin persists a
         // price SNAPSHOT — the "same price when they come back" guarantee.
         let custPhone: string | undefined;
@@ -407,18 +445,26 @@ export default function OrderView({
         const res = await fetch(`${API_URL}/api/services/quote`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            brand: "SKYAL",
-            serviceType,
-            quantity: qty,
-            sla,
-            deliveryMethod: delivOption?.apiMethod,
-            referralCode: referral || undefined,
-            // Send the address so the server verifies it (Mapbox geocoding)
-            // and prices delivery exactly instead of a hardcoded fee.
-            ...(delivery !== "pickup" && address.trim().length >= 5 ? { deliveryAddress: address.trim() } : {}),
-            ...(custPhone ? { customerPhone: custPhone } : {}),
-          }),
+          body: JSON.stringify(
+            buildQuotePayload({
+              serviceType,
+              quantity: qty,
+              sla,
+              requestedPickupTime,
+              deliveryMethod: delivOption?.apiMethod,
+              referralCode: referral || undefined,
+              // Send the address so the server verifies it (Mapbox geocoding)
+              // and prices delivery exactly instead of a hardcoded fee.
+              deliveryAddress:
+                delivery !== "pickup" && address.trim().length >= 5
+                  ? address.trim()
+                  : undefined,
+              customerPhone: custPhone,
+              selectedVariant: selectedVariant || undefined,
+              selectedOptions:
+                Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
+            }),
+          ),
         });
         const data = await res.json();
         if (cancelled) return;
@@ -440,7 +486,7 @@ export default function OrderView({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [serviceType, qty, sla, delivery, referral, service, step, delivOption, address]);
+  }, [serviceType, qty, sla, delivery, referral, service, step, delivOption, address, requestedPickupTime, selectedVariant, selectedOptions]);
 
   /* ── Group services by category for the picker ── */
   const servicesByCategory = useMemo(() => {
@@ -452,14 +498,15 @@ export default function OrderView({
     return Array.from(m.entries());
   }, [services]);
 
-  /* ── Fallback estimate (used when the quote API hasn't replied yet) ── */
+  /* ── Fallback estimate (used when the quote API hasn't replied yet).
+       Mirrors the engine's tiered express ladder from the pickup time — the
+       legacy flat `expressSurchargePct` is no longer the pricing rule. ── */
+  const fallbackTierPct = requestedPickupTime ? pickupTierPct(requestedPickupTime) : 0;
   const fallbackEstimate = useMemo(() => {
     if (!service) return 0;
     const base = service.basePriceNaira * qty;
-    const expressMult =
-      sla === "Express" && service.allowExpress ? 1 + service.expressSurchargePct : 1;
-    return Math.round(base * expressMult + (delivOption?.cost ?? 0));
-  }, [service, qty, sla, delivOption]);
+    return Math.round(base * (1 + fallbackTierPct) + (delivOption?.cost ?? 0));
+  }, [service, qty, fallbackTierPct, delivOption]);
 
   const quoteTotal = quote?.quoteNaira ?? fallbackEstimate;
   const deliveryFee = quote?.breakdown?.deliveryFee ?? delivOption?.cost ?? 0;
@@ -467,12 +514,22 @@ export default function OrderView({
   const baseSubtotal =
     quote?.breakdown?.subtotal ?? (service ? service.basePriceNaira * qty : 0);
 
+  const requiredOptionLabels = service?.optionFields
+    ? missingRequiredOptionFields(service.optionFields, selectedOptions)
+    : [];
+  const pickupValid = !!requestedPickupTime && isValidPickupISO(requestedPickupTime);
+  const phoneValid = isValidNigerianPhone(phone);
+
   const canNext =
     (step === 0 && (customMode || !!serviceType)) ||
-    (step === 1 && (customMode ? qty > 0 && !!customDescription.trim() : qty > 0)) ||
-    (step === 2 && (delivery === "pickup" || address.trim().length > 4)) ||
-    (step === 3 && name.trim() && phone.trim().length >= 6) ||
-    step === 4;
+    (step === 1 &&
+      (customMode
+        ? qty > 0 && !!customDescription.trim()
+        : qty > 0 && requiredOptionLabels.length === 0)) ||
+    (step === 2 && pickupValid) ||
+    (step === 3 && (delivery === "pickup" || address.trim().length > 4)) ||
+    (step === 4 && !!name.trim() && phoneValid) ||
+    step === 5;
 
   const submit = async () => {
     setSubmitting(true);
@@ -534,36 +591,42 @@ export default function OrderView({
       // Step 1: Create the order — catalog path sends serviceType; custom mode
       // sends customSpec and the ADMIN runs the rule lookup (jeans → fabric_custom
       // ₦20k, wood → engraving_wood; truly novel jobs land in QUOTING).
-      const basePayload: Record<string, unknown> = {
-        brand: "SKYAL",
+      //
+      // `customerEmail` is sent verbatim (empty string when the customer left
+      // it blank — the backend currently requires the key). If the backend
+      // ever rejects empty emails, surface that error so the backend can be
+      // relaxed rather than fabricating an address.
+      const payload = buildOrderPayload({
         quantity: qty,
         sla,
         customerName: name.trim(),
         customerPhone: phone.trim(),
-        customerEmail: email.trim() || `customer@skyal.ng`,
+        customerEmail: email.trim(),
+        requestedPickupTime,
         deliveryMethod: delivOption?.apiMethod,
-      };
-      if (delivery !== "pickup") basePayload.deliveryAddress = address.trim();
-      if (referral) basePayload.referralCode = referral.trim();
-      if (designFileUrl) {
-        basePayload.designFileUrl = designFileUrl;
-        basePayload.designFilePublicId = designFilePublicId;
-      }
-      // Customer notes contain ONLY the notes — design file names travel in
-      // designFileUrl and the referral code travels as referralCode.
-      if (notes.trim()) basePayload.customerNotes = notes.trim();
-
-      const payload: Record<string, unknown> = customMode
-        ? {
-            ...basePayload,
-            customSpec: {
-              description: customDescription.trim(),
-              material: customMaterial.trim() || undefined,
-              dimensions: customDimensions.trim() || undefined,
-              complexity: 'simple',
-            },
-          }
-        : { ...basePayload, serviceType };
+        deliveryAddress: delivery !== "pickup" ? address.trim() : undefined,
+        referralCode: referral.trim() || undefined,
+        designFileUrl,
+        designFilePublicId,
+        // Customer notes contain ONLY the notes — design file names travel in
+        // designFileUrl and the referral code travels as referralCode.
+        customerNotes: notes.trim() || undefined,
+        ...(customMode
+          ? {
+              customSpec: {
+                description: customDescription.trim(),
+                material: customMaterial.trim() || undefined,
+                dimensions: customDimensions.trim() || undefined,
+                complexity: 'simple',
+              },
+            }
+          : {
+              serviceType,
+              selectedVariant: selectedVariant || undefined,
+              selectedOptions:
+                Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
+            }),
+      });
 
       const res = await fetch(`${API_URL}/api/orders`, {
         method: "POST",
@@ -654,6 +717,9 @@ export default function OrderView({
     setServiceType("");
     setQty(1);
     setSla("Standard");
+    setRequestedPickupTime("");
+    setSelectedOptions({});
+    setSelectedVariant("");
     setDelivery("pickup");
     setAddress("");
     setNotes("");
@@ -864,7 +930,14 @@ export default function OrderView({
                     {list.map((s) => (
                       <button
                         key={s.id}
-                        onClick={() => { setServiceType(s.type); setCustomMode(false); }}
+                        onClick={() => {
+                          setServiceType(s.type);
+                          // Options are per-service — never carry a previous
+                          // service's selection into the next one.
+                          setSelectedOptions({});
+                          setSelectedVariant("");
+                          setCustomMode(false);
+                        }}
                         className={`text-left p-5 border transition-colors ${
                           serviceType === s.type
                             ? "border-laser bg-vellum"
@@ -1030,6 +1103,22 @@ export default function OrderView({
                   </div>
                 </div>
 
+                {((service.optionFields?.length ?? 0) > 0 || (service.options?.length ?? 0) > 0) && (
+                  <div>
+                    <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
+                      Options
+                    </label>
+                    <OptionFieldsBlock
+                      service={service}
+                      values={selectedOptions}
+                      onChange={setSelectedOptions}
+                      variant={selectedVariant}
+                      onVariantChange={setSelectedVariant}
+                    />
+                    <RequiredOptionsHint missing={requiredOptionLabels} />
+                  </div>
+                )}
+
                 <div>
                   <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
                     Design files <span className="lowercase">(up to 5, max 10MB each)</span>
@@ -1120,6 +1209,20 @@ export default function OrderView({
 
           {step === 2 && (
             <div>
+              <h2 className="font-display font-semibold text-2xl text-ink mb-1">When do you need it?</h2>
+              <p className="text-sm text-thread mb-6">
+                Pick a future weekday pickup time — we price express tiers from it
+                (same-day and rush orders cost more).
+              </p>
+              <PickupDateTimePicker
+                value={requestedPickupTime}
+                onChange={setRequestedPickupTime}
+              />
+            </div>
+          )}
+
+          {step === 3 && (
+            <div>
               <h2 className="font-display font-semibold text-2xl text-ink mb-1">Delivery</h2>
               <p className="text-sm text-thread mb-6">How should your pieces reach you?</p>
               <div className="space-y-3">
@@ -1197,14 +1300,23 @@ export default function OrderView({
             </div>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <div>
               <h2 className="font-display font-semibold text-2xl text-ink mb-1">Your details</h2>
               <p className="text-sm text-thread mb-6">So we can send the quote and reach you.</p>
               <div className="space-y-5">
                 <Field label="Name" value={name} onChange={setName} placeholder="Company or individual" />
-                <Field label="Phone" value={phone} onChange={setPhone} placeholder="0803 000 0000" type="tel" />
-                <Field label="Email" value={email} onChange={setEmail} placeholder="you@studio.com" type="email" />
+                <div>
+                  <Field label="Phone" value={phone} onChange={setPhone} placeholder="0803 350 3068" type="tel" />
+                  {phone.trim() && !phoneValid && (
+                    <p className="text-xs text-oxblood mt-2" role="alert">
+                      Enter a valid Nigerian phone number (e.g. 0803 350 3068).
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <Field label="Email (optional)" value={email} onChange={setEmail} placeholder="you@studio.com" type="email" />
+                </div>
                 <p className="text-xs text-thread">
                   We verify returning customers by phone — no password. New here? We&apos;ll save your details for next time.
                 </p>
@@ -1212,7 +1324,7 @@ export default function OrderView({
             </div>
           )}
 
-          {step === 4 && (
+          {step === 5 && (
             <div>
               <h2 className="font-display font-semibold text-2xl text-ink mb-1">Review &amp; confirm</h2>
               <p className="text-sm text-thread mb-6">Check everything looks right.</p>
@@ -1223,6 +1335,18 @@ export default function OrderView({
                 )}
                 <Row k="Quantity" v={customMode ? `${qty}` : `${qty} ${service?.unit ?? ""}`} />
                 <Row k="Turnaround" v={sla} />
+                {pickupValid && <Row k="Pickup" v={formatPickupISO(requestedPickupTime)} />}
+                {(service?.optionFields?.length ?? 0) > 0
+                  ? service!.optionFields!.map((f) => (
+                      <Row
+                        key={f.key}
+                        k={f.label}
+                        v={selectedOptions[f.key] || "—"}
+                      />
+                    ))
+                  : selectedVariant
+                    ? <Row k="Option" v={selectedVariant} />
+                    : null}
                 <Row k="Delivery" v={delivOption?.label ?? "—"} />
                 {delivery !== "pickup" && address && <Row k="Address" v={address} />}
                 <Row k="Name" v={name || "—"} />
@@ -1268,7 +1392,7 @@ export default function OrderView({
             >
               <ArrowLeft className="w-4 h-4" /> {step === 0 ? "Home" : "Back"}
             </button>
-            {step < 4 ? (
+            {step < 5 ? (
               <button
                 onClick={() => canNext && setStep(step + 1)}
                 disabled={!canNext}
@@ -1334,7 +1458,16 @@ export default function OrderView({
                 </div>
                 <div className="my-5 h-px bg-bone/20" />
                 <Line k="Cutting" v={formatNaira(baseSubtotal)} />
-                {expressSurcharge > 0 && <Line k="Express" v={`+${formatNaira(expressSurcharge)}`} />}
+                {quote ? (
+                  expressSurcharge > 0 && <Line k="Express" v={`+${formatNaira(expressSurcharge)}`} />
+                ) : (
+                  fallbackTierPct > 0 && (
+                    <Line
+                      k="Express tier"
+                      v={`+${formatNaira(Math.round(baseSubtotal * fallbackTierPct))}`}
+                    />
+                  )
+                )}
                 <Line k="Delivery" v={deliveryFee === 0 ? "free" : formatNaira(deliveryFee)} />
                 {quoteLoading && (
                   <div className="flex items-center gap-1.5 mt-1 text-[11px] text-bone/60">

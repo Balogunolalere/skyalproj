@@ -10,6 +10,8 @@
  * shows the ENGINE's price. The model has no price tables.
  */
 
+import { isValidPickupISO } from '@/lib/order';
+
 /* ───────────────────────────── Types ───────────────────────────── */
 
 export interface ChatMessage {
@@ -51,6 +53,8 @@ export interface ChatSpecs {
   delivery?: 'PICKUP' | 'LOCAL_DELIVERY';
   delivery_address?: string;
   needs_design_upload?: boolean;
+  /** ISO pickup time when the customer gave a deadline (validated on parse). */
+  requested_pickup_time?: string;
 }
 
 /** Material availability surfaced by the admin pricing engine. */
@@ -398,6 +402,16 @@ export function parseSpecsBlock(text: string): ChatSpecs | undefined {
   const slaRaw = typeof q.sla === 'string' ? q.sla.trim().toLowerCase() : '';
   const sla = slaRaw === 'express' ? ('Express' as const) : slaRaw === 'standard' ? ('Standard' as const) : undefined;
 
+  // The model may emit a pickup time in free text; only keep ISO strings that
+  // satisfy the same backend rules the order form enforces (future weekday,
+  // 09:00–18:00 Lagos, ≤30 days). Anything else falls back to the route's
+  // default (now + 2 working days at 17:00 Lagos).
+  const rawPickup = typeof q.requested_pickup_time === 'string' ? q.requested_pickup_time.trim() : '';
+  const requested_pickup_time =
+    rawPickup.length > 0 && Number.isFinite(Date.parse(rawPickup)) && isValidPickupISO(rawPickup)
+      ? rawPickup
+      : undefined;
+
   return {
     service_type: serviceType,
     custom_description: typeof q.custom_description === 'string' ? q.custom_description.trim().slice(0, 1000) : undefined,
@@ -407,6 +421,7 @@ export function parseSpecsBlock(text: string): ChatSpecs | undefined {
     delivery,
     delivery_address: typeof q.delivery_address === 'string' ? q.delivery_address.trim().slice(0, 500) : undefined,
     needs_design_upload: q.needs_design_upload === true,
+    requested_pickup_time,
   };
 }
 
@@ -566,6 +581,7 @@ Always respond conversationally first, then if you've extracted the full spec, a
   "sla": "Standard" or "Express" (omit if not discussed),
   "delivery": "PICKUP" or "LOCAL_DELIVERY" (omit if not discussed),
   "delivery_address": "<address, only when delivery is LOCAL_DELIVERY>",
+  "requested_pickup_time": "<ISO 8601 date-time when the customer needs the job, only when they gave a deadline>",
   "needs_design_upload": true or false
 }
 [/SPECS]

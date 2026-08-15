@@ -432,7 +432,31 @@
     "standardLeadTime": "5 working days",
     "expressLeadTime": "48 hours",
     "allowExpress": true,
-    "expressSurchargePct": 0.5
+    "expressSurchargePct": 0.5,
+    "options": [],
+    "optionFields": [
+      {
+        "key": "colour",
+        "label": "Colour",
+        "type": "dropdown",
+        "choices": ["Gold", "Silver", "Red", "Green", "Pink", "Blue", "Purple", "Black", "White", "Yellow"],
+        "required": true
+      },
+      {
+        "key": "message",
+        "label": "Topper message",
+        "type": "text",
+        "maxLength": 120,
+        "required": true
+      },
+      {
+        "key": "age",
+        "label": "Age",
+        "type": "number",
+        "min": 1,
+        "max": 100
+      }
+    ]
   },
   {
     "id": "svc-s-kc6ah207wh",
@@ -447,7 +471,31 @@
     "standardLeadTime": "5-7 working days",
     "expressLeadTime": null,
     "allowExpress": false,
-    "expressSurchargePct": 0
+    "expressSurchargePct": 0,
+    "options": [],
+    "optionFields": [
+      {
+        "key": "colour",
+        "label": "Colour",
+        "type": "dropdown",
+        "choices": ["Gold", "Silver", "Red", "Green", "Pink", "Blue", "Purple", "Black", "White", "Yellow"],
+        "required": true
+      },
+      {
+        "key": "message",
+        "label": "Topper message",
+        "type": "text",
+        "maxLength": 120,
+        "required": true
+      },
+      {
+        "key": "age",
+        "label": "Age",
+        "type": "number",
+        "min": 1,
+        "max": 100
+      }
+    ]
   },
   {
     "id": "svc-s-bne3a74xbk",
