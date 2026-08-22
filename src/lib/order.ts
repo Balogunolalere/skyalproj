@@ -16,16 +16,43 @@
 
 /* ───────────────────────────── Option fields ───────────────────────────── */
 
+/**
+ * A single dropdown choice as returned by GET /api/services. Entries are
+ * EITHER plain strings ("Gold") OR objects `{ value, image? }` where `image`
+ * is an optional URL showing what the choice looks like.
+ */
+export interface OptionChoice {
+  value: string;
+  image?: string;
+}
+
 /** Structured option field as returned by GET /api/services (Django-style). */
 export interface OptionField {
   key: string;
   label: string;
   type: 'dropdown' | 'text' | 'textarea' | 'number';
-  choices?: string[];
+  choices?: (string | OptionChoice)[];
   required?: boolean;
   min?: number;
   max?: number;
   maxLength?: number;
+}
+
+/** Normalize mixed string/object choices to `{ value, image? }`. */
+export function normalizeChoices(
+  choices: (string | OptionChoice)[] | null | undefined,
+): OptionChoice[] {
+  if (!Array.isArray(choices)) return [];
+  return choices
+    .filter((c): c is string | OptionChoice => typeof c === 'string' || (!!c && typeof c === 'object'))
+    .map((c) =>
+      typeof c === 'string'
+        ? { value: c }
+        : {
+            value: String(c.value ?? ''),
+            ...(c.image ? { image: c.image } : {}),
+          },
+    );
 }
 
 /** Option-related shape every service payload carries. */

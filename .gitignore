@@ -39,3 +39,4 @@ scripts/data/
 tests/datasets/
 __pycache__/
 *.pyc
+reasonix.toml

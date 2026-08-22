@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { OptionFieldsBlock } from '@/components/skyal/OptionFieldsBlock'
 import type { OptionField } from '@/lib/order'
+import catalogServices from './fixtures/skyal-services.json'
 
 /**
  * optionFields → form inputs mapping: every field type must render the right
@@ -100,10 +101,40 @@ describe('OptionFieldsBlock — legacy flat options', () => {
   });
 });
 
+describe('OptionFieldsBlock — image choice grid', () => {
+  const imageField: OptionField = {
+    key: 'colour',
+    label: 'Colour',
+    type: 'dropdown',
+    required: true,
+    choices: [{ value: 'Gold', image: 'https://x/g.png' }, 'Silver'],
+  };
+
+  test('renders two radio choices with a thumbnail on the image choice', () => {
+    const html = render([imageField], { colour: 'Gold' });
+    expect(html).toContain('role="radiogroup"');
+    expect(html).toContain('role="radio"');
+    expect(html).toContain('aria-checked="true"');
+    expect(html).toContain('data-choice-value="Gold"');
+    expect(html).toContain('src="https://x/g.png"');
+    expect(html).toContain('>Gold<');
+    expect(html).toContain('>Silver<');
+    // Thumbnails can't render in a native select — switch to the grid.
+    expect(html).not.toContain('<select');
+  });
+
+  test('string-only choices keep the native select (no grid)', () => {
+    const html = render([
+      { key: 'colour', label: 'Colour', type: 'dropdown', choices: ['Gold', 'Silver'] },
+    ]);
+    expect(html).toContain('<select');
+    expect(html).not.toContain('role="radiogroup"');
+  });
+});
+
 describe('OptionFieldsBlock — Acrylic Cake Topper (Skyal) from the catalog fixture', () => {
   test('renders Colour dropdown + Topper message text + Age number', () => {
-    const services = require('./fixtures/skyal-services.json') as Array<Record<string, unknown>>;
-    const topper = services.find((s) => s.type === 'skyal_topper_acrylic');
+    const topper = catalogServices.find((s) => s.type === 'skyal_topper_acrylic');
     expect(topper).toBeDefined();
 
     const html = renderToStaticMarkup(

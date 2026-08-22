@@ -9,6 +9,7 @@ import {
   pickupTierPct,
   pickupDateBounds,
   missingRequiredOptionFields,
+  normalizeChoices,
   buildQuotePayload,
   buildOrderPayload,
   MAX_PICKUP_DAYS,
@@ -172,6 +173,29 @@ describe('pickupDateBounds', () => {
     // Sat 15 → Sun 16 → Mon 17 Aug
     expect(b.minDate.getDate()).toBe(17);
     expect(b.minTime).toBeUndefined();
+  })
+})
+
+/* ── Option-choice normalization (string | { value, image? }) ────────────── */
+
+describe('normalizeChoices', () => {
+  test('normalizes plain strings and image objects to { value, image? }', () => {
+    expect(
+      normalizeChoices(['Gold', { value: 'Silver', image: 'https://x/s.png' }]),
+    ).toEqual([
+      { value: 'Gold' },
+      { value: 'Silver', image: 'https://x/s.png' },
+    ]);
+  })
+
+  test('keeps objects without an image as { value }', () => {
+    expect(normalizeChoices([{ value: 'Oak' }])).toEqual([{ value: 'Oak' }]);
+  })
+
+  test('tolerates missing/garbage choice lists', () => {
+    expect(normalizeChoices(undefined)).toEqual([]);
+    expect(normalizeChoices(null)).toEqual([]);
+    expect(normalizeChoices([])).toEqual([]);
   })
 })
 

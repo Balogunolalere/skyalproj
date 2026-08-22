@@ -1,13 +1,18 @@
 "use client";
 
-import type { OptionField, ServiceOptionShape } from "@/lib/order";
+import { normalizeChoices, type OptionField, type ServiceOptionShape } from "@/lib/order";
 
 /**
  * Renders the service's option inputs exactly like the admin contract:
  *  - `optionFields` → one input per field by type (dropdown → select of
  *    choices, text → input, textarea → textarea, number → number with
  *    min/max) with values kept as strings in `selectedOptions`.
- *  - legacy `options: string[]` → the single dropdown, stored in `variant`.
+ *  - dropdown choices may be strings OR `{ value, image? }` objects; when any
+ *    choice carries an image, the dropdown renders as a radio-style choice
+ *    grid so the thumbnails are visible. The selected value is still just the
+ *    string `choice.value` — no payload changes.
+ *  - legacy `options: string[]` → the single dropdown, stored in `variant`,
+ *    exactly as before.
  *
  * Kept free of hooks so it can be server-rendered in unit tests.
  */
@@ -83,22 +88,78 @@ function OptionFieldInput({
       {" "}*
     </span>
   ) : null;
-  const label = (
-    <label
-      htmlFor={`option-${field.key}`}
-      className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread"
-    >
+  const labelContent = (
+    <>
       {field.label}
       {requiredMark}
       {!field.required && <span className="lowercase"> (optional)</span>}
+    </>
+  );
+  const labelClass = "font-mono text-[10px] uppercase tracking-[0.18em] text-thread";
+  const fieldLabel = (
+    <label htmlFor={`option-${field.key}`} className={labelClass}>
+      {labelContent}
     </label>
   );
 
   switch (field.type) {
-    case "dropdown":
+    case "dropdown": {
+      const choices = normalizeChoices(field.choices);
+      const hasImages = choices.some((c) => !!c.image);
+
+      // Thumbnails can't render inside a native <select>, so when any choice
+      // has an image switch to a radio-style grid. The emitted value is still
+      // the plain string `choice.value`.
+      if (hasImages) {
+        return (
+          <div>
+            <span className={labelClass}>{labelContent}</span>
+            <div
+              role="radiogroup"
+              aria-label={field.label}
+              className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-3"
+            >
+              {choices.map((choice) => {
+                const selected = value === choice.value;
+                return (
+                  <button
+                    key={choice.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    data-choice-value={choice.value}
+                    onClick={() => onChange(choice.value)}
+                    className={`p-2 border text-left transition-colors flex items-center gap-3 ${
+                      selected
+                        ? "border-laser bg-vellum"
+                        : "border-hairline bg-bone hover:border-ink/40"
+                    }`}
+                  >
+                    {choice.image ? (
+                      <img
+                        src={choice.image}
+                        alt=""
+                        loading="lazy"
+                        className="h-10 w-10 shrink-0 object-cover border border-hairline"
+                      />
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className="h-10 w-10 shrink-0 border border-hairline bg-vellum"
+                      />
+                    )}
+                    <span className="text-sm text-ink">{choice.value}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      }
+
       return (
         <div>
-          {label}
+          {fieldLabel}
           <select
             id={`option-${field.key}`}
             value={value}
@@ -107,18 +168,19 @@ function OptionFieldInput({
             className={inputClass}
           >
             <option value="">{field.required ? "Select…" : "None"}</option>
-            {(field.choices ?? []).map((choice) => (
-              <option key={choice} value={choice}>
-                {choice}
+            {choices.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.value}
               </option>
             ))}
           </select>
         </div>
       );
+    }
     case "textarea":
       return (
         <div>
-          {label}
+          {fieldLabel}
           <textarea
             id={`option-${field.key}`}
             value={value}
@@ -133,7 +195,7 @@ function OptionFieldInput({
     case "number":
       return (
         <div>
-          {label}
+          {fieldLabel}
           <input
             id={`option-${field.key}`}
             type="number"
@@ -150,7 +212,7 @@ function OptionFieldInput({
     default:
       return (
         <div>
-          {label}
+          {fieldLabel}
           <input
             id={`option-${field.key}`}
             type="text"
