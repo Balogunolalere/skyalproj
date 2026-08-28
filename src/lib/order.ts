@@ -6,13 +6,27 @@
  * route without rendering any UI:
  *
  *  - Nigerian phone validation (backend `isValidPhone`)
- *  - `requestedPickupTime` rules: future date, Mon–Fri, 09:00–18:00
- *    Africa/Lagos, at most 30 days ahead
+ *  - `requestedPickupTime` rules: future date, working day (Mon–Fri minus
+ *    observed public holidays), within the configured opening hours (default
+ *    08:00–17:00) Africa/Lagos, at most 30 days ahead
  *  - the 4-tier express ladder the engine prices server-side
- *    (SAME_DAY_URGENT +100%, SAME_DAY +50%, RUSH +25%, STANDARD 0%)
+ *    (SAME_DAY_URGENT +100%, SAME_DAY +50%, RUSH +25%, STANDARD 0%) — computed
+ *    against the SNAPPED production start (orders after close / weekend /
+ *    holiday start at the next opening)
  *  - `selectedOptions` / `selectedVariant` payload shape
  *  - quote + order payload builders
+ *
+ * The business calendar (configurable on the admin Settings page) is loaded
+ * via `getBusinessCalendar()`; all rules take an optional `calendar` argument
+ * and default to the shop's real schedule (08:00–17:00 Mon–Fri, no holidays).
  */
+
+import {
+  type BusinessCalendar,
+  DEFAULT_BUSINESS_CALENDAR,
+  isWorkingDayCal,
+  snapToBusinessOpening,
+} from '@/lib/business-calendar';
 
 /* ───────────────────────────── Option fields ───────────────────────────── */
 
@@ -108,30 +122,36 @@ export function lagosWall(ms: number): Date {
   return new Date(ms + LAGOS_OFFSET_MINUTES * 60000);
 }
 
-function isWeekday(wall: Date): boolean {
-  const dow = wall.getUTCDay();
-  return dow >= 1 && dow <= 5; // Mon–Fri
+function holidayKey(wall: Date): string {
+  return `${wall.getUTCFullYear()}-${String(wall.getUTCMonth() + 1).padStart(2, '0')}-${String(wall.getUTCDate()).padStart(2, '0')}`;
+}
+
+function isWorkingDay(wall: Date, cal: BusinessCalendar): boolean {
+  return cal.workingDays.includes(wall.getUTCDay()) && !cal.holidays.has(holidayKey(wall));
 }
 
 /**
  * Server-enforced `requestedPickupTime` contract:
  *  - future instant
- *  - Mon–Fri in Africa/Lagos
- *  - 09:00–18:00 Lagos wall-clock (18:00 included, later minutes not)
+ *  - working day in Africa/Lagos (Mon–Fri minus observed public holidays)
+ *  - within [open, close) Lagos wall-clock — CLOSING IS EXCLUSIVE (17:00
+ *    with the default calendar is rejected)
  *  - at most `MAX_PICKUP_DAYS` ahead
  */
-export function isValidPickupISO(iso: string, nowMs: number = Date.now()): boolean {
+export function isValidPickupISO(
+  iso: string,
+  nowMs: number = Date.now(),
+  cal: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+): boolean {
   if (typeof iso !== 'string' || iso.length === 0) return false;
   if (!Number.isFinite(nowMs)) return false;
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return false;
 
   const wall = lagosWall(t);
-  if (!isWeekday(wall)) return false;
-  const hour = wall.getUTCHours();
-  const minute = wall.getUTCMinutes();
-  if (hour < 9 || hour > 18) return false;
-  if (hour === 18 && minute !== 0) return false;
+  if (!isWorkingDay(wall, cal)) return false;
+  const minutes = wall.getUTCHours() * 60 + wall.getUTCMinutes();
+  if (minutes < cal.openMinute || minutes >= cal.closeMinute) return false;
 
   if (t <= nowMs) return false;
   if (t > nowMs + MAX_PICKUP_DAYS * 86400000) return false;
@@ -141,12 +161,13 @@ export function isValidPickupISO(iso: string, nowMs: number = Date.now()): boole
 /**
  * Compose an ISO string from a `YYYY-MM-DD` date and `HH:mm` time treated as
  * Africa/Lagos wall-clock. Returns `null` when the result violates the
- * backend rules (weekend, outside 09:00–18:00, not future, >30 days).
+ * backend rules (weekend/holiday, outside working hours, not future, >30 days).
  */
 export function pickupISOFromParts(
   dateStr: string,
   timeStr: string,
   nowMs: number = Date.now(),
+  cal: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
 ): string | null {
   const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
   const timeMatch = /^(\d{1,2}):(\d{2})$/.exec(timeStr.trim());
@@ -160,7 +181,7 @@ export function pickupISOFromParts(
 
   // Lagos wall-clock → UTC instant (Lagos = UTC+1).
   const iso = new Date(Date.UTC(year, month, day, hour - 1, minute)).toISOString();
-  return isValidPickupISO(iso, nowMs) ? iso : null;
+  return isValidPickupISO(iso, nowMs, cal) ? iso : null;
 }
 
 export interface PickupDateBounds {
@@ -173,20 +194,24 @@ export interface PickupDateBounds {
 }
 
 /**
- * Calendar bounds for the pickup picker: today (Lagos) — or tomorrow once the
- * studio has closed at 18:00 — rolled forward past weekends, up to
- * `MAX_PICKUP_DAYS` ahead. Returns browser-local midnights so the calendar
- * renders the same dates in any timezone; `isValidPickupISO` remains the
- * authoritative check.
+ * Calendar bounds for the pickup picker: today (Lagos) — or the next working
+ * day once the studio has closed (or on a weekend/holiday) — rolled forward
+ * past weekends and observed holidays, up to `MAX_PICKUP_DAYS` ahead. Returns
+ * browser-local midnights so the calendar renders the same dates in any
+ * timezone; `isValidPickupISO` remains the authoritative check.
  */
-export function pickupDateBounds(nowMs: number = Date.now()): PickupDateBounds {
+export function pickupDateBounds(
+  nowMs: number = Date.now(),
+  cal: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+): PickupDateBounds {
   const wall = lagosWall(nowMs);
+  const minutes = wall.getUTCHours() * 60 + wall.getUTCMinutes();
   let min = new Date(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate());
 
-  if (wall.getUTCHours() >= 18) {
+  if (minutes >= cal.closeMinute) {
     min = new Date(min.getTime() + 86400000);
   }
-  while (!isWeekday(lagosWall(min.getTime()))) {
+  while (!isWorkingDay(lagosWall(min.getTime()), cal)) {
     min = new Date(min.getTime() + 86400000);
   }
 
@@ -200,30 +225,40 @@ export function pickupDateBounds(nowMs: number = Date.now()): PickupDateBounds {
     wall.getUTCMonth() === min.getMonth() &&
     wall.getUTCDate() === min.getDate();
   if (isToday) {
-    // First :00/:30 slot strictly after now.
+    // First :00/:30 slot strictly after now, clamped into [open, close).
+    let minute = Math.ceil((wall.getUTCMinutes() + 1) / 30) * 30;
     let hour = wall.getUTCHours();
-    let minute = (Math.floor(wall.getUTCMinutes() / 30) + 1) * 30;
     if (minute >= 60) {
       hour += 1;
       minute = 0;
     }
-    if (hour < 9) {
-      hour = 9;
-      minute = 0;
-    }
-    if (hour <= 18 && minute < 60) {
-      bounds.minTime = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+    const first = hour * 60 + minute;
+    const slot = first < cal.openMinute
+      ? Math.ceil(cal.openMinute / 30) * 30 // the first 30-min slot at/after opening
+      : first;
+    if (slot < cal.closeMinute) {
+      bounds.minTime = `${String(Math.floor(slot / 60)).padStart(2, '0')}:${String(slot % 60).padStart(2, '0')}`;
     }
   }
 
   return bounds;
 }
 
+function defaultPickupDayMinutes(cal: BusinessCalendar): number {
+  // One hour before closing — valid for the default (16:00 with 08:00–17:00)
+  // AND for customized hours (never lands exactly on the exclusive close).
+  return Math.max(cal.openMinute, cal.closeMinute - 60);
+}
+
 /**
- * Sane default pickup: now + 2 working days at 17:00 Africa/Lagos.
+ * Sane default pickup: now + 2 working days (skipping weekends AND observed
+ * holidays) at one hour before closing Africa/Lagos (16:00 by default).
  * Used by the chat route when the customer's spec has no pickup time.
  */
-export function defaultPickupISO(nowMs: number = Date.now()): string {
+export function defaultPickupISO(
+  nowMs: number = Date.now(),
+  cal: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+): string {
   const startWall = lagosWall(nowMs);
   let cursor = new Date(
     Date.UTC(startWall.getUTCFullYear(), startWall.getUTCMonth(), startWall.getUTCDate() + 1),
@@ -231,14 +266,15 @@ export function defaultPickupISO(nowMs: number = Date.now()): string {
   let workingDays = 0;
   while (true) {
     const wall = lagosWall(cursor.getTime());
-    if (isWeekday(wall)) {
+    if (isWorkingDay(wall, cal)) {
       workingDays += 1;
       if (workingDays >= 2) break;
     }
     cursor = new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() + 1));
   }
   const wall = lagosWall(cursor.getTime());
-  return new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(), 17 - 1, 0)).toISOString();
+  const minutes = defaultPickupDayMinutes(cal);
+  return new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(), Math.floor(minutes / 60) - 1, minutes % 60)).toISOString();
 }
 
 /** YYYYMMDD key of a Lagos wall-clock date (for day comparisons). */
@@ -246,8 +282,9 @@ function lagosDayKey(wall: Date): number {
   return wall.getUTCFullYear() * 10000 + (wall.getUTCMonth() + 1) * 100 + wall.getUTCDate();
 }
 
-/** Weekdays strictly after `fromWall`'s date up to and including `toWall`'s. */
-function workingDaysAhead(fromWall: Date, toWall: Date): number {
+/** Working days strictly after `fromWall`'s date up to and including `toWall`'s
+ *  (weekends AND observed holidays skipped). */
+function workingDaysAhead(fromWall: Date, toWall: Date, cal: BusinessCalendar): number {
   const toKey = lagosDayKey(toWall);
   let count = 0;
   let cursor = new Date(
@@ -256,7 +293,7 @@ function workingDaysAhead(fromWall: Date, toWall: Date): number {
   while (true) {
     const wall = lagosWall(cursor.getTime());
     if (lagosDayKey(wall) > toKey) break;
-    if (isWeekday(wall)) count += 1;
+    if (isWorkingDay(wall, cal)) count += 1;
     cursor = new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() + 1));
   }
   return count;
@@ -265,28 +302,37 @@ function workingDaysAhead(fromWall: Date, toWall: Date): number {
 /**
  * Client mirror of the engine's tiered express ladder, driven ONLY by the
  * pickup time (the legacy flat `expressSurchargePct` is no longer the rule):
- *   SAME_DAY_URGENT  <4h ahead            +100%
- *   SAME_DAY         ≥4h, same Lagos day  +50%
- *   RUSH             <2 working days      +25%
- *   STANDARD         otherwise            0%
- * Returns the surcharge ratio (1.0 = +100%).
+ *   SAME_DAY_URGENT  <4h from the effective start      +100%
+ *   SAME_DAY         ≥4h, same Lagos working day       +50%
+ *   RUSH             <2 working days (holiday-aware)   +25%
+ *   STANDARD         otherwise                           0%
+ *
+ * Like the engine, "now" is snapped to the business calendar first: an order
+ * placed after closing, on a weekend or on an observed holiday starts at the
+ * next opening (e.g. Fri 18:30 → Mon 08:00), so a Monday 09:00 pickup is
+ * URGENT (+100%), not RUSH. Returns the surcharge ratio (1.0 = +100%).
  */
-export function pickupTierPct(pickupISO: string, nowMs: number = Date.now()): number {
+export function pickupTierPct(
+  pickupISO: string,
+  nowMs: number = Date.now(),
+  cal: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+): number {
   const t = Date.parse(pickupISO);
   if (!Number.isFinite(t)) return 0;
 
-  const hoursAhead = (t - nowMs) / 3600000;
+  const effectiveNow = snapToBusinessOpening(nowMs, cal);
+  const hoursAhead = (t - effectiveNow) / 3600000;
   if (hoursAhead < 4) return 1.0;
 
   const pickupWall = lagosWall(t);
-  const nowWall = lagosWall(nowMs);
+  const nowWall = lagosWall(effectiveNow);
   const sameDay =
     pickupWall.getUTCFullYear() === nowWall.getUTCFullYear() &&
     pickupWall.getUTCMonth() === nowWall.getUTCMonth() &&
     pickupWall.getUTCDate() === nowWall.getUTCDate();
   if (sameDay) return 0.5;
 
-  if (workingDaysAhead(nowWall, pickupWall) < 2) return 0.25;
+  if (workingDaysAhead(nowWall, pickupWall, cal) < 2) return 0.25;
   return 0;
 }
 

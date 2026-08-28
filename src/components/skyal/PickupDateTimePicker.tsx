@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Calendar } from "@/components/ui/calendar";
 import {
   isValidPickupISO,
@@ -9,18 +9,21 @@ import {
   pickupISOFromParts,
   formatPickupISO,
 } from "@/lib/order";
+import {
+  type BusinessCalendar,
+  DEFAULT_BUSINESS_CALENDAR,
+  fmtClock,
+  getBusinessCalendar,
+} from "@/lib/business-calendar";
 
-/** 09:00–18:00 in 30-minute slots (18:30 excluded). */
-const TIME_SLOTS: string[] = (() => {
+/** 30-minute slots within [open, close) — closing is EXCLUSIVE (17:00 excluded). */
+function timeSlots(cal: BusinessCalendar): string[] {
   const slots: string[] = [];
-  for (let h = 9; h <= 18; h++) {
-    for (const m of [0, 30]) {
-      if (h === 18 && m === 30) continue;
-      slots.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
-    }
+  for (let m = Math.ceil(cal.openMinute / 30) * 30; m < cal.closeMinute; m += 30) {
+    slots.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
   }
   return slots;
-})();
+}
 
 /** `YYYY-MM-DD` of a browser-local Date (used to feed `pickupISOFromParts`). */
 function localDateKey(d: Date): string {
@@ -29,8 +32,11 @@ function localDateKey(d: Date): string {
 
 /**
  * Pickup date + time picker mirroring the backend `requestedPickupTime`
- * contract: weekends disabled, 09:00–18:00 Africa/Lagos only, at most 30 days
- * ahead. Emits an ISO string ("" when nothing valid is selected).
+ * contract: weekends AND observed public holidays disabled, configured working
+ * hours (default 08:00–17:00) Africa/Lagos only, at most 30 days ahead.
+ * Emits an ISO string ("" when nothing valid is selected).
+ * The business calendar is fetched from the admin (public settings) — any
+ * failure falls back to the defaults.
  */
 export function PickupDateTimePicker({
   value,
@@ -41,19 +47,31 @@ export function PickupDateTimePicker({
   onChange: (iso: string) => void;
 }) {
   const [touched, setTouched] = useState(false);
+  const [cal, setCal] = useState<BusinessCalendar>(DEFAULT_BUSINESS_CALENDAR);
+
+  useEffect(() => {
+    let live = true;
+    getBusinessCalendar().then((c) => {
+      if (live) setCal(c);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   // Bounds are computed from the Lagos wall clock; as browser-local midnights
   // they render as the same calendar dates regardless of the machine TZ.
-  const bounds = useMemo(() => pickupDateBounds(), []);
+  const bounds = useMemo(() => pickupDateBounds(Date.now(), cal), [cal]);
+  const slots = useMemo(() => timeSlots(cal), [cal]);
 
   const selected = useMemo(() => {
-    if (!value || !isValidPickupISO(value)) return { date: undefined as Date | undefined, time: "" };
+    if (!value || !isValidPickupISO(value, Date.now(), cal)) return { date: undefined as Date | undefined, time: "" };
     const wall = lagosWall(Date.parse(value));
     return {
       date: new Date(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate()),
       time: `${String(wall.getUTCHours()).padStart(2, "0")}:${String(wall.getUTCMinutes()).padStart(2, "0")}`,
     };
-  }, [value]);
+  }, [value, cal]);
 
   const isToday = (d: Date | undefined): boolean =>
     !!d && localDateKey(d) === localDateKey(bounds.minDate);
@@ -64,18 +82,19 @@ export function PickupDateTimePicker({
       onChange("");
       return;
     }
-    const iso = pickupISOFromParts(localDateKey(date), time);
+    const iso = pickupISOFromParts(localDateKey(date), time, Date.now(), cal);
     if (iso) {
       onChange(iso);
       return;
     }
     // The previous time may be unusable for this date (e.g. today and already
     // past) — fall back to the first valid slot for that date.
-    const fallbackTime = isToday(date) ? bounds.minTime ?? "09:00" : "09:00";
-    onChange(pickupISOFromParts(localDateKey(date), fallbackTime) ?? "");
+    const fallbackTime = isToday(date) ? bounds.minTime ?? slots[0] ?? "" : slots[0] ?? "";
+    onChange(pickupISOFromParts(localDateKey(date), fallbackTime, Date.now(), cal) ?? "");
   };
 
-  const valid = !!value && isValidPickupISO(value);
+  const valid = !!value && isValidPickupISO(value, Date.now(), cal);
+  const hoursLabel = `${fmtClock(cal.openMinute)}–${fmtClock(cal.closeMinute)}`;
 
   return (
     <div className="space-y-5">
@@ -88,16 +107,21 @@ export function PickupDateTimePicker({
             <Calendar
               mode="single"
               selected={selected.date}
-              onSelect={(d) => commit(d ?? undefined, selected.time || "09:00")}
+              onSelect={(d) => commit(d ?? undefined, selected.time || slots[0] || "")}
               defaultMonth={selected.date ?? bounds.minDate}
               fromDate={bounds.minDate}
               toDate={bounds.maxDate}
-              disabled={{ dayOfWeek: [0, 6] }}
+              disabled={(d) => {
+                // The calendar renders browser-local midnights that stand for
+                // Lagos dates (same convention as `localDateKey` below).
+                const key = localDateKey(d);
+                return [0, 6].includes(d.getDay()) || cal.holidays.has(key);
+              }}
               numberOfMonths={1}
             />
           </div>
           <p className="text-xs text-thread mt-2 leading-relaxed">
-            Mon–Fri only · within 30 days.
+            Working days only (Mon–Fri minus observed public holidays) · within 30 days.
           </p>
         </div>
 
@@ -113,7 +137,7 @@ export function PickupDateTimePicker({
             <option value="" disabled>
               Select a time…
             </option>
-            {TIME_SLOTS.map((slot) => {
+            {slots.map((slot) => {
               const past = !!(
                 isToday(selected.date) &&
                 bounds.minTime &&
@@ -127,7 +151,7 @@ export function PickupDateTimePicker({
             })}
           </select>
           <p className="text-xs text-thread mt-2 leading-relaxed">
-            Studio hours are 09:00–18:00 WAT.
+            Studio hours are {hoursLabel} WAT.
           </p>
 
           {valid && (
@@ -145,7 +169,7 @@ export function PickupDateTimePicker({
 
       {touched && !valid && (
         <p className="text-sm text-oxblood" role="alert">
-          Pick a future weekday (Mon–Fri) between 09:00 and 18:00 Lagos time —
+          Pick a future working day (Mon–Fri, not a public holiday) between {hoursLabel} Lagos time —
           no more than 30 days ahead.
         </p>
       )}

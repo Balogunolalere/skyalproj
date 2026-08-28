@@ -2,7 +2,7 @@
  * Handler-level tests for POST /api/chat (Skyal).
  *
  * These exercise the real route handler (src/app/api/chat/route.ts) with a
- * mocked Agnes API. They cover the behaviors the pure-function unit tests
+ * mocked DeepSeek API. They cover the behaviors the pure-function unit tests
  * can't: validation status codes, injection via history, retry semantics,
  * engine pricing ([SPECS] → admin /api/services/quote), the custom handoff,
  * and error classification.
@@ -17,7 +17,7 @@ import type { ChatResponse } from '@/lib/chat'
 import { defaultPickupISO, isValidPickupISO } from '@/lib/order'
 
 // Must be set BEFORE the route module is imported (config is read at module load)
-process.env.AGNES_API_KEY = 'test-key'
+process.env.DEEPSEEK_API_KEY = 'test-key'
 process.env.RETRY_BASE_DELAY = '1'
 process.env.TOTAL_TIMEOUT = '5000'
 process.env.FETCH_TIMEOUT = '1000'
@@ -28,14 +28,14 @@ global.fetch = vi.fn()
 
 let POST: typeof import('@/app/api/chat/route').POST
 
-const AGNES_URL = 'https://apihub.agnes-ai.com/v1/chat/completions'
+const DEEPSEEK_URL = 'https://api.deepseek.com/v1/chat/completions'
 
-function agnesCompletion(content: string) {
+function deepseekCompletion(content: string) {
   return {
     id: 'chatcmpl-test',
     object: 'chat.completion',
     created: 1,
-    model: 'agnes-2.0-flash',
+    model: 'deepseek-chat',
     choices: [{ index: 0, message: { role: 'assistant', content, finish_reason: 'stop' } }],
     usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
   }
@@ -45,16 +45,16 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-/** Mock global fetch: Agnes calls get `agnesHandler`, the admin pricing engine
+/** Mock global fetch: DeepSeek calls get `deepseekHandler`, the admin pricing engine
  *  (`/api/services/quote`) gets `engineHandler`, saved quotes (`/api/quotes`)
  *  get `quotesHandler`, everything else (admin save) gets 200. */
 function mockFetch(
-  agnesHandler: (init?: RequestInit) => Response | Promise<Response>,
+  deepseekHandler: (init?: RequestInit) => Response | Promise<Response>,
   engineHandler?: (init?: RequestInit) => Response | Promise<Response>,
   quotesHandler?: (init?: RequestInit) => Response | Promise<Response>
 ) {
   ;(fetch as any).mockImplementation((url: string, init?: RequestInit) => {
-    if (url.includes('apihub.agnes-ai.com')) return Promise.resolve(agnesHandler(init))
+    if (url.includes('api.deepseek.com')) return Promise.resolve(deepseekHandler(init))
     if (url.includes('/api/services/quote')) {
       if (!engineHandler) throw new Error('mockFetch: engine call not expected in this test')
       return Promise.resolve(engineHandler(init))
@@ -102,7 +102,7 @@ async function send(body: unknown, headers: Record<string, string> = {}) {
 
 /**
  * NOTE: the route keeps a 60s response cache keyed on the exact message, so
- * every test that reaches the Agnes call must use a UNIQUE message or it will
+ * every test that reaches the DeepSeek call must use a UNIQUE message or it will
  * be served from the cache of a previous test.
  */
 function mkBody(message: string) {
@@ -151,7 +151,7 @@ describe('POST /api/chat — validation', () => {
   })
 
   test('should accept legitimate messages (no prices from the model)', async () => {
-    mockFetch(() => jsonResponse(agnesCompletion('A full buba works well. Let me confirm the exact price for you.')))
+    mockFetch(() => jsonResponse(deepseekCompletion('A full buba works well. Let me confirm the exact price for you.')))
     const { status, body } = await send(mkBody('How much for a full buba?'))
     expect(status).toBe(200)
     expect(body.assistant_text).toContain('A full buba works well')
@@ -170,7 +170,7 @@ describe('POST /api/chat — engine pricing happy path', () => {
 }
 [/SPECS]`
     mockFetch(
-      () => jsonResponse(agnesCompletion(content)),
+      () => jsonResponse(deepseekCompletion(content)),
       () => engineQuote(105000, 'fabric_buba')
     )
 
@@ -195,7 +195,7 @@ describe('POST /api/chat — engine pricing happy path', () => {
 [/SPECS]`
     let engineBody: any = null
     mockFetch(
-      () => jsonResponse(agnesCompletion(content)),
+      () => jsonResponse(deepseekCompletion(content)),
       (init) => {
         engineBody = JSON.parse(String(init?.body))
         return engineQuote(7500, 'engraving_wood', 'Standard', 1)
@@ -215,7 +215,7 @@ describe('POST /api/chat — engine pricing happy path', () => {
   })
 
   test('should not set render_order_now when no [SPECS] is produced', async () => {
-    mockFetch(() => jsonResponse(agnesCompletion('What material are you cutting? Fabric, wood, or acrylic?')))
+    mockFetch(() => jsonResponse(deepseekCompletion('What material are you cutting? Fabric, wood, or acrylic?')))
     const { body } = await send(mkBody('What materials do you cut?'))
     expect(body.quote).toBeUndefined()
     expect(body.custom).toBeUndefined()
@@ -229,7 +229,7 @@ describe('POST /api/chat — engine pricing happy path', () => {
 [/SPECS]`
     let engineBody: any = null
     mockFetch(
-      () => jsonResponse(agnesCompletion(content)),
+      () => jsonResponse(deepseekCompletion(content)),
       (init) => {
         engineBody = JSON.parse(String(init?.body))
         return engineQuote(40000, 'fabric_sleeves', 'Standard', 2)
@@ -247,7 +247,7 @@ describe('POST /api/chat — engine pricing happy path', () => {
 [/SPECS]`
     let engineBody: any = null
     mockFetch(
-      () => jsonResponse(agnesCompletion(content)),
+      () => jsonResponse(deepseekCompletion(content)),
       (init) => {
         engineBody = JSON.parse(String(init?.body))
         return engineQuote(7500, 'engraving_wood', 'Standard', 1)
@@ -270,7 +270,7 @@ describe('POST /api/chat — engine pricing happy path', () => {
 [/SPECS]`
     let engineBody: any = null
     mockFetch(
-      () => jsonResponse(agnesCompletion(content)),
+      () => jsonResponse(deepseekCompletion(content)),
       (init) => {
         engineBody = JSON.parse(String(init?.body))
         return engineQuote(7500, 'engraving_wood', 'Standard', 1)
@@ -292,7 +292,7 @@ describe('POST /api/chat — engine pricing happy path', () => {
   "quantity": 1
 }
 [/SPECS]`
-    mockFetch(() => jsonResponse(agnesCompletion(content)))
+    mockFetch(() => jsonResponse(deepseekCompletion(content)))
 
     const { status, body } = await send(mkBody('Can you restore my grandmother music box lid?'))
     expect(status).toBe(200)
@@ -311,7 +311,7 @@ describe('POST /api/chat — engine pricing happy path', () => {
 [/SPECS]`
     // 400 = hard engine failure → not retried, fast path
     mockFetch(
-      () => jsonResponse(agnesCompletion(content)),
+      () => jsonResponse(deepseekCompletion(content)),
       () => jsonResponse({ error: { message: 'engine boom' } }, 400)
     )
 
@@ -324,37 +324,37 @@ describe('POST /api/chat — engine pricing happy path', () => {
 
   test('should surface saved OPEN quotes on the first turn', async () => {
     mockFetch(
-      () => jsonResponse(agnesCompletion('Sure, what are you cutting?'))
+      () => jsonResponse(deepseekCompletion('Sure, what are you cutting?'))
     )
     const { body } = await send({ ...mkBody('Do you remember my saved quote?'), customerPhone: '08035003068' })
     expect(body.openQuotes).toBeDefined()
   })
 
   test('should reuse the incoming session ID', async () => {
-    mockFetch(() => jsonResponse(agnesCompletion('Sure!')))
+    mockFetch(() => jsonResponse(deepseekCompletion('Sure!')))
     const { body } = await send({ ...mkBody('Please reuse my session'), sessionId: 'skyal_existing_123' })
     expect(body.sessionId).toBe('skyal_existing_123')
   })
 
   test('should ignore an invalid session ID and generate a new one', async () => {
-    mockFetch(() => jsonResponse(agnesCompletion('Sure!')))
+    mockFetch(() => jsonResponse(deepseekCompletion('Sure!')))
     const { body } = await send({ ...mkBody('What is your delivery fee?'), sessionId: 12345 })
     expect(body.sessionId).toMatch(/^skyal_/)
   })
 })
 
 describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
-  function captureAgnes() {
-    let agnesMessages: Array<{ role: string; content: string }> = []
+  function captureDeepSeek() {
+    let DeepSeekMessages: Array<{ role: string; content: string }> = []
     mockFetch((init) => {
-      agnesMessages = JSON.parse(String(init?.body)).messages
-      return jsonResponse(agnesCompletion('Sure!'))
+      DeepSeekMessages = JSON.parse(String(init?.body)).messages
+      return jsonResponse(deepseekCompletion('Sure!'))
     })
-    return () => agnesMessages
+    return () => DeepSeekMessages
   }
 
-  test('should thread user+assistant history to Agnes on follow-up messages', async () => {
-    const getMessages = captureAgnes()
+  test('should thread user+assistant history to DeepSeek on follow-up messages', async () => {
+    const getMessages = captureDeepSeek()
     const { status } = await send({
       message: 'ok how much for 3?',
       history: [
@@ -371,7 +371,7 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
   })
 
   test('should thread the full conversation in the messages-array format', async () => {
-    const getMessages = captureAgnes()
+    const getMessages = captureDeepSeek()
     const { status } = await send({
       messages: [
         { role: 'user', content: 'I need a buba' },
@@ -391,7 +391,7 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
   })
 
   test('should not duplicate the current message when also present in history', async () => {
-    const getMessages = captureAgnes()
+    const getMessages = captureDeepSeek()
     const { status } = await send({
       message: 'how much?',
       history: [
@@ -408,7 +408,7 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
   })
 
   test('should thread a separate message on top of the messages array without dropping turns', async () => {
-    const getMessages = captureAgnes()
+    const getMessages = captureDeepSeek()
     const { status } = await send({
       message: 'thanks!',
       messages: [
@@ -425,7 +425,7 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
   })
 
   test('should NOT fabricate context from sessionId alone', async () => {
-    const getMessages = captureAgnes()
+    const getMessages = captureDeepSeek()
     const { status } = await send({
       message: 'hello again',
       history: [],
@@ -440,14 +440,14 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
   })
 })
 
-describe('POST /api/chat — Agnes failure handling', () => {
+describe('POST /api/chat — DeepSeek failure handling', () => {
   test('should retry transient 5xx errors and succeed on the second attempt', async () => {
     let calls = 0
     mockFetch(
       () => {
         calls++
         if (calls === 1) return jsonResponse({ error: 'upstream boom' }, 503)
-        return jsonResponse(agnesCompletion(`Your custom sheet cutting:
+        return jsonResponse(deepseekCompletion(`Your custom sheet cutting:
 [SPECS]
 {"service_type":"sheet_cutting_custom","quantity":1,"delivery":"PICKUP"}
 [/SPECS]`))
@@ -461,13 +461,13 @@ describe('POST /api/chat — Agnes failure handling', () => {
     expect(body.quote?.price).toBe(20000)
   })
 
-  test('should retry 429 rate-limit errors from Agnes', async () => {
+  test('should retry 429 rate-limit errors from DeepSeek', async () => {
     let calls = 0
     mockFetch(
       () => {
         calls++
         if (calls === 1) return jsonResponse({ error: 'rate limited' }, 429)
-        return jsonResponse(agnesCompletion(`Wood engraving:
+        return jsonResponse(deepseekCompletion(`Wood engraving:
 [SPECS]
 {"service_type":"engraving_wood","quantity":1,"delivery":"PICKUP"}
 [/SPECS]`))

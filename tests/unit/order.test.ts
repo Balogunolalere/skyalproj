@@ -15,6 +15,7 @@ import {
   MAX_PICKUP_DAYS,
   type OptionField,
 } from '@/lib/order'
+import { DEFAULT_BUSINESS_CALENDAR } from '@/lib/business-calendar'
 
 /* ── Nigerian phone validation (backend `isValidPhone`) ─────────────────── */
 
@@ -59,7 +60,7 @@ describe('Nigerian phone validation', () => {
   })
 })
 
-/* ── requestedPickupTime contract (future, Mon–Fri, 09:00–18:00 Lagos, ≤30d) ── */
+/* ── requestedPickupTime contract (future, working day, configured hours, ≤30d) ── */
 
 // Base instant: Mon 10 Aug 2026, 08:00 Africa/Lagos (= 07:00 UTC).
 const NOW_MS = Date.UTC(2026, 7, 10, 7, 0);
@@ -67,22 +68,27 @@ const iso = (y: number, mo: number, d: number, hLagos: number, min = 0) =>
   new Date(Date.UTC(y, mo - 1, d, hLagos - 1, min)).toISOString();
 
 describe('isValidPickupISO', () => {
-  test('accepts a future weekday within 09:00–18:00 Lagos', () => {
+  test('accepts a future weekday within 08:00–17:00 Lagos', () => {
     expect(isValidPickupISO(iso(2026, 8, 11, 10), NOW_MS)).toBe(true) // Tue 10:00
     expect(isValidPickupISO(iso(2026, 8, 10, 9), NOW_MS)).toBe(true) // today 09:00
-    expect(isValidPickupISO(iso(2026, 8, 10, 18), NOW_MS)).toBe(true) // 18:00 exactly
+    expect(isValidPickupISO(iso(2026, 8, 11, 8), NOW_MS)).toBe(true) // Tue 08:00 = opening, valid
+    expect(isValidPickupISO(iso(2026, 8, 11, 16), NOW_MS)).toBe(true) // 16:00 — one hour before close
   })
 
-  test('rejects weekends', () => {
+  test('rejects weekends and observed public holidays', () => {
     expect(isValidPickupISO(iso(2026, 8, 15, 10), NOW_MS)).toBe(false) // Sat
     expect(isValidPickupISO(iso(2026, 8, 16, 10), NOW_MS)).toBe(false) // Sun
+    // Wed 12 Aug is set as an observed public holiday → rejected.
+    const holidayCal = { ...DEFAULT_BUSINESS_CALENDAR, holidays: new Set(['2026-08-12']) };
+    expect(isValidPickupISO(iso(2026, 8, 12, 10), NOW_MS, holidayCal)).toBe(false)
+    expect(isValidPickupISO(iso(2026, 8, 13, 10), NOW_MS, holidayCal)).toBe(true)
   })
 
-  test('rejects times outside studio hours', () => {
-    expect(isValidPickupISO(iso(2026, 8, 11, 8), NOW_MS)).toBe(false) // before 09:00
-    expect(isValidPickupISO(iso(2026, 8, 11, 8, 59), NOW_MS)).toBe(false)
-    expect(isValidPickupISO(iso(2026, 8, 11, 18, 30), NOW_MS)).toBe(false) // after 18:00
-    expect(isValidPickupISO(iso(2026, 8, 11, 19), NOW_MS)).toBe(false)
+  test('rejects times outside studio hours (closing is exclusive)', () => {
+    expect(isValidPickupISO(iso(2026, 8, 11, 7, 59), NOW_MS)).toBe(false) // before 08:00
+    expect(isValidPickupISO(iso(2026, 8, 11, 17), NOW_MS)).toBe(false) // 17:00 = closing, rejected
+    expect(isValidPickupISO(iso(2026, 8, 11, 17, 30), NOW_MS)).toBe(false) // after close
+    expect(isValidPickupISO(iso(2026, 8, 11, 18), NOW_MS)).toBe(false) // after close
   })
 
   test('rejects past and far-future instants', () => {
@@ -100,21 +106,23 @@ describe('isValidPickupISO', () => {
 describe('pickupISOFromParts', () => {
   test('composes Lagos wall-clock date+time into a valid ISO string', () => {
     expect(pickupISOFromParts('2026-08-11', '10:00', NOW_MS)).toBe(iso(2026, 8, 11, 10))
+    expect(pickupISOFromParts('2026-08-11', '08:00', NOW_MS)).toBe(iso(2026, 8, 11, 8)) // opening
   })
 
   test('returns null for weekends, bad hours, past times', () => {
     expect(pickupISOFromParts('2026-08-15', '10:00', NOW_MS)).toBeNull() // Sat
-    expect(pickupISOFromParts('2026-08-11', '08:00', NOW_MS)).toBeNull()
+    expect(pickupISOFromParts('2026-08-11', '07:00', NOW_MS)).toBeNull() // before open
+    expect(pickupISOFromParts('2026-08-11', '17:00', NOW_MS)).toBeNull() // closing — exclusive
     expect(pickupISOFromParts('2026-08-11', '18:30', NOW_MS)).toBeNull()
     expect(pickupISOFromParts('2026-08-10', '08:00', NOW_MS)).toBeNull() // not future
   })
 })
 
 describe('defaultPickupISO', () => {
-  test('is now + 2 working days at 17:00 Lagos', () => {
-    // Fri 14 Aug 2026, 10:00 Lagos → Sat/Sun skipped → Tue 18 Aug 17:00 Lagos.
+  test('is now + 2 working days at 16:00 Lagos (one hour before close)', () => {
+    // Fri 14 Aug 2026, 10:00 Lagos → Sat/Sun skipped → Tue 18 Aug 16:00 Lagos.
     const friMs = Date.UTC(2026, 7, 14, 9, 0);
-    expect(defaultPickupISO(friMs)).toBe(iso(2026, 8, 18, 17));
+    expect(defaultPickupISO(friMs)).toBe(iso(2026, 8, 18, 16));
     // The default must satisfy the exact same rules the backend enforces.
     expect(isValidPickupISO(defaultPickupISO(friMs), friMs)).toBe(true);
   })
@@ -123,6 +131,22 @@ describe('defaultPickupISO', () => {
     const now = Date.now();
     const d = defaultPickupISO(now);
     expect(isValidPickupISO(d, now)).toBe(true);
+  })
+
+  test('skips observed public holidays', () => {
+    const holidayCal = { ...DEFAULT_BUSINESS_CALENDAR, holidays: new Set(['2026-08-18']) }; // Tue holiday
+    const friMs = Date.UTC(2026, 7, 14, 9, 0);
+    // Fri + 2 working days: Mon 17 (1), Tue 18 holiday skipped → Wed 19 (2).
+    expect(defaultPickupISO(friMs, holidayCal)).toBe(iso(2026, 8, 19, 16));
+    expect(isValidPickupISO(defaultPickupISO(friMs, holidayCal), friMs, holidayCal)).toBe(true);
+  })
+
+  test('respects customized hours (never lands on the exclusive close)', () => {
+    const cal = { ...DEFAULT_BUSINESS_CALENDAR, openMinute: 10 * 60, closeMinute: 16 * 60 };
+    const friMs = Date.UTC(2026, 7, 14, 9, 0);
+    const d = defaultPickupISO(friMs, cal);
+    expect(d).toBe(iso(2026, 8, 18, 15)); // close - 1h = 15:00, inside [10:00, 16:00)
+    expect(isValidPickupISO(d, friMs, cal)).toBe(true);
   })
 })
 
@@ -152,26 +176,52 @@ describe('pickupTierPct — the 4-tier express ladder', () => {
     const thuMs = Date.UTC(2026, 7, 13, 7, 0);
     expect(pickupTierPct(iso(2026, 8, 17, 10), thuMs)).toBe(0)
   })
+
+  test('after-close order snaps to the next opening (Fri 18:30 → Mon 08:00, pickup 09:00 = URGENT)', () => {
+    // Fri 14 Aug 2026, 18:30 Lagos = 17:30 UTC. Pickup Mon 17 Aug 09:00 Lagos.
+    const friEvening = Date.UTC(2026, 7, 14, 17, 30);
+    expect(pickupTierPct(iso(2026, 8, 17, 9), friEvening)).toBe(1.0) // 1h of production
+  })
+
+  test('weekend order with a Monday pickup is SAME_DAY (5h from opening)', () => {
+    // Sat 15 Aug 12:00 Lagos; pickup Mon 17 Aug 13:00 Lagos = 5h after the
+    // Monday 08:00 opening → +50%, not RUSH.
+    const satNoon = Date.UTC(2026, 7, 15, 11, 0);
+    expect(pickupTierPct(iso(2026, 8, 17, 13), satNoon)).toBe(0.5)
+  })
+
+  test('observed holidays count as non-working days (Wed pickup = RUSH)', () => {
+    const holidayCal = { ...DEFAULT_BUSINESS_CALENDAR, holidays: new Set(['2026-08-11']) }; // Tue holiday
+    expect(pickupTierPct(iso(2026, 8, 12, 10), NOW_MS, holidayCal)).toBe(0.25) // Wed = 1 working day
+    expect(pickupTierPct(iso(2026, 8, 13, 10), NOW_MS, holidayCal)).toBe(0) // Thu = 2 working days
+  })
 })
 
 describe('pickupDateBounds', () => {
-  test('opens today (Lagos) when before 18:00 and rolls past weekends', () => {
-    const monMorning = Date.UTC(2026, 7, 10, 7, 0); // Mon 08:00 Lagos
-    const b = pickupDateBounds(monMorning);
+  test('opens today (Lagos) when before closing and rolls past weekends', () => {
+    const monOpening = Date.UTC(2026, 7, 10, 7, 0); // Mon 08:00 Lagos = opening
+    const b = pickupDateBounds(monOpening);
     expect(b.minDate.getFullYear()).toBe(2026);
     expect(b.minDate.getMonth()).toBe(7); // Aug
     expect(b.minDate.getDate()).toBe(10);
-    // 08:00 is before the studio opens — the first usable slot is 09:00.
-    expect(b.minTime).toBe('09:00');
+    // 08:00 exactly = opening; next 30-min slot is 08:30.
+    expect(b.minTime).toBe('08:30');
     const max = b.maxDate.getTime() - b.minDate.getTime();
     expect(max).toBeLessThanOrEqual((MAX_PICKUP_DAYS + 2) * 86400000);
   })
 
   test('moves to Monday from a Friday evening', () => {
-    const friEvening = Date.UTC(2026, 7, 14, 17, 30); // Fri 18:30 Lagos
+    const friEvening = Date.UTC(2026, 7, 14, 17, 30); // Fri 18:30 Lagos — after 17:00 close
     const b = pickupDateBounds(friEvening);
     // Sat 15 → Sun 16 → Mon 17 Aug
     expect(b.minDate.getDate()).toBe(17);
+    expect(b.minTime).toBeUndefined();
+  })
+
+  test('rolls past an observed public holiday', () => {
+    const holidayCal = { ...DEFAULT_BUSINESS_CALENDAR, holidays: new Set(['2026-08-10']) }; // Mon holiday
+    const b = pickupDateBounds(Date.UTC(2026, 7, 10, 7, 0), holidayCal); // Mon 08:00 Lagos
+    expect(b.minDate.getDate()).toBe(11); // Tue 11 Aug — the next working day
     expect(b.minTime).toBeUndefined();
   })
 })

@@ -11,11 +11,11 @@ function mkReq(body: any) {
   } as unknown as NextRequest
 }
 
-/** Mock: Agnes calls get `content`, the admin engine (/api/services/quote)
+/** Mock: DeepSeek calls get `content`, the admin engine (/api/services/quote)
  *  gets an engine price, everything else gets 200. */
 function mockChat(content: string, quoteNaira?: number) {
   mockFetch.mockImplementation((url: string) => {
-    if (String(url).includes('apihub.agnes-ai.com')) {
+    if (String(url).includes('api.deepseek.com')) {
       return Promise.resolve({
         ok: true,
         json: async () => ({ choices: [{ message: { content } }] }),
@@ -51,7 +51,7 @@ function mockChat(content: string, quoteNaira?: number) {
 describe('Skyal Chat API', () => {
   beforeEach(() => {
     mockFetch.mockClear()
-    process.env.AGNES_API_KEY = 'test-key'
+    process.env.DEEPSEEK_API_KEY = 'test-key'
   })
 
   it('returns structured response with sessionId', async () => {
@@ -109,7 +109,7 @@ describe('Skyal Chat API', () => {
   })
 
   it('handles missing API key', async () => {
-    delete process.env.AGNES_API_KEY
+    delete process.env.DEEPSEEK_API_KEY
     const { POST } = await import('/home/doombuggy_/Projects/skyalproj/src/app/api/chat/route')
     const res = await POST(mkReq({ messages: [{ role: 'user', content: 'x' }] }))
     expect(res.status).toBe(500)

@@ -13,9 +13,10 @@ import {
   type ChatResponse,
 } from "@/lib/chat";
 import { defaultPickupISO } from "@/lib/order";
+import { getBusinessCalendar } from "@/lib/business-calendar";
 
 export const runtime = "nodejs";
-// Vercel function duration — required so slow Agnes calls (20-45s) aren't
+// Vercel function duration — required so slow DeepSeek calls (20-45s) aren't
 // killed as 504s. Hobby caps at 60s; on Pro you can raise to 300 and bump
 // TOTAL_TIMEOUT.
 export const maxDuration = 60;
@@ -67,7 +68,7 @@ async function saveToAdmin(sessionId: string, messages: Array<{ role: string; co
 /** Statuses worth retrying — everything else is a hard failure. */
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
-/** Error carrying an HTTP status from the Agnes API (used to decide retries). */
+/** Error carrying an HTTP status from the DeepSeek API (used to decide retries). */
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -105,8 +106,11 @@ async function callAdminQuote(specs: ChatSpecs, customerPhone?: string): Promise
     deliveryMethod: specs.delivery,
     deliveryAddress: specs.delivery === 'LOCAL_DELIVERY' ? specs.delivery_address : undefined,
     // The engine rejects quotes without a pickup time — when the customer
-    // never gave a deadline, default to now + 2 working days at 17:00 Lagos.
-    requestedPickupTime: specs.requested_pickup_time || defaultPickupISO(),
+    // never gave a deadline, default to now + 2 working days at one hour
+    // before closing (16:00 Lagos by default), within the CONFIGURED
+    // business calendar (custom hours + observed public holidays).
+    requestedPickupTime:
+      specs.requested_pickup_time || defaultPickupISO(Date.now(), await getBusinessCalendar()),
     ...(customerPhone ? { customerPhone } : {}),
   };
   const res = await retryWithBackoff(
@@ -356,7 +360,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const key = process.env.AGNES_API_KEY;
+    const key = process.env.DEEPSEEK_API_KEY;
     if (!key) return NextResponse.json({ reply: 'AI not configured. Contact support.', error: 'AI not configured' }, { status: 500 });
 
     // Generate or reuse session ID for conversation continuity
@@ -365,15 +369,15 @@ export async function POST(req: NextRequest) {
         ? incomingSessionId
         : generateSessionId();
 
-    // Build Agnes messages (system prompt + sanitized history + current message)
-    const agnesMsgs = [
+    // Build DeepSeek messages (system prompt + sanitized history + current message)
+    const deepseekMsgs = [
       { role: 'system' as const, content: SKYAL_SYSTEM_PROMPT },
       ...sanitizedHistory,
       { role: 'user' as const, content: message },
     ];
 
     // ── Response cache ──
-    const ck = cacheKey(agnesMsgs);
+    const ck = cacheKey(deepseekMsgs);
     const cached = cacheGet(ck);
     if (cached) {
       const custPhoneVal =
@@ -394,14 +398,14 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ── Call Agnes 2.0 Flash with per-attempt timeout + retry/backoff ──
+    // ── Call DeepSeek (deepseek-chat) with per-attempt timeout + retry/backoff ──
     // Each attempt gets its OWN AbortController + timeout: an aborted
     // controller stays aborted, so sharing one across retries would make
     // every retry after a timeout fail instantly (and the timeout must be
     // re-armed per attempt, not cleared after the first fetch).
     const fetchStartTime = performance.now();
 
-    const callAgnes = async (remainingBudgetMs: number) => {
+    const callDeepseek = async (remainingBudgetMs: number) => {
       // Shrink the per-attempt timeout to fit the remaining total budget so a
       // single attempt can't burn 30s past the 60s cap. Floor at 500ms: if the
       // budget is nearly gone, the pre-attempt check in retryWithBackoff
@@ -410,10 +414,10 @@ export async function POST(req: NextRequest) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), attemptTimeout);
       try {
-        const response = await fetch("https://apihub.agnes-ai.com/v1/chat/completions", {
+        const response = await fetch("https://api.deepseek.com/chat/completions", {
           method: "POST",
           headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "agnes-2.0-flash", messages: agnesMsgs, temperature: 0.5, max_tokens: 4096 }),
+          body: JSON.stringify({ model: "deepseek-chat", messages: deepseekMsgs, temperature: 0.5, max_tokens: 4096 }),
           signal: controller.signal,
         });
 
@@ -424,17 +428,17 @@ export async function POST(req: NextRequest) {
 
           // 401/403 and other 4xx are hard failures — never retried
           if (status === 401 || status === 403) {
-            throw new Error(`Agnes API authentication error (${status}). Check AGNES_API_KEY.`);
+            throw new Error(`DeepSeek API authentication error (${status}). Check DEEPSEEK_API_KEY.`);
           }
           if (RETRYABLE_STATUS.has(status)) {
             throw new HttpError(
               status,
               status === 429
-                ? `Agnes API rate limit exceeded (429). Try again in a few seconds.`
-                : `Agnes API server error (${status}). The model may be temporarily unavailable.`
+                ? `DeepSeek API rate limit exceeded (429). Try again in a few seconds.`
+                : `DeepSeek API server error (${status}). The model may be temporarily unavailable.`
             );
           }
-          throw new Error(`Agnes API error: ${status} - ${errorText.substring(0, 200)}`);
+          throw new Error(`DeepSeek API error: ${status} - ${errorText.substring(0, 200)}`);
         }
 
         return (await response.json()) as {
@@ -447,7 +451,7 @@ export async function POST(req: NextRequest) {
 
     let data: { choices?: Array<{ message?: { content?: string } }> };
     try {
-      data = await retryWithBackoff(callAgnes, {
+      data = await retryWithBackoff(callDeepseek, {
         maxRetries: MAX_RETRIES,
         baseDelay: RETRY_BASE_DELAY,
         budgetMs: TOTAL_BUDGET_MS,
@@ -455,7 +459,7 @@ export async function POST(req: NextRequest) {
       });
     } catch (error: any) {
       if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
-        throw new Error(`Agnes API request timed out after ${FETCH_TIMEOUT}ms`);
+        throw new Error(`DeepSeek API request timed out after ${FETCH_TIMEOUT}ms`);
       }
       throw error;
     }

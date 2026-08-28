@@ -21,6 +21,11 @@ import { AvailabilityLine } from "../AvailabilityLine";
 import { AddressPicker } from "./AddressPicker";
 import { OptionFieldsBlock, RequiredOptionsHint } from "../OptionFieldsBlock";
 import { PickupDateTimePicker } from "../PickupDateTimePicker";
+import {
+  type BusinessCalendar,
+  DEFAULT_BUSINESS_CALENDAR,
+  getBusinessCalendar,
+} from "@/lib/business-calendar";
 
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
@@ -150,8 +155,20 @@ export default function OrderView({
   const [serviceType, setServiceType] = useState<string>("");
   const [qty, setQty] = useState(1);
   const [sla, setSla] = useState<"Standard" | "Express">("Standard");
-  // Required by the backend: ISO string, future weekday 09:00–18:00 Lagos.
+  // Required by the backend: ISO string, future working day within the
+  // configured hours (default 08:00–17:00) Lagos.
   const [requestedPickupTime, setRequestedPickupTime] = useState("");
+  // Configurable business calendar (open/close + observed public holidays).
+  const [cal, setCal] = useState<BusinessCalendar>(DEFAULT_BUSINESS_CALENDAR);
+  useEffect(() => {
+    let live = true;
+    getBusinessCalendar().then((c) => {
+      if (live) setCal(c);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
   // Service options: structured `optionFields` (key → string value) win over
   // the legacy flat `options` dropdown — never send both for one service.
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({});
@@ -220,7 +237,7 @@ export default function OrderView({
     }
     // A pickup time the chat assistant extracted is carried through (validated
     // against the same backend rules the picker enforces).
-    if (specs?.requested_pickup_time && isValidPickupISO(specs.requested_pickup_time)) {
+    if (specs?.requested_pickup_time && isValidPickupISO(specs.requested_pickup_time, Date.now(), cal)) {
       setRequestedPickupTime(specs.requested_pickup_time);
     }
     setStep(1);
@@ -425,7 +442,7 @@ export default function OrderView({
         // The engine rejects quotes without a valid pickup time
         // (REQUESTED_PICKUP_REQUIRED) — hold the quote until the customer has
         // picked one, so the sidebar never flashes that error mid-flow.
-        if (!requestedPickupTime || !isValidPickupISO(requestedPickupTime)) {
+        if (!requestedPickupTime || !isValidPickupISO(requestedPickupTime, Date.now(), cal)) {
           if (!cancelled) {
             setQuote(null);
             setQuoteLoading(false);
@@ -501,7 +518,7 @@ export default function OrderView({
   /* ── Fallback estimate (used when the quote API hasn't replied yet).
        Mirrors the engine's tiered express ladder from the pickup time — the
        legacy flat `expressSurchargePct` is no longer the pricing rule. ── */
-  const fallbackTierPct = requestedPickupTime ? pickupTierPct(requestedPickupTime) : 0;
+  const fallbackTierPct = requestedPickupTime ? pickupTierPct(requestedPickupTime, Date.now(), cal) : 0;
   const fallbackEstimate = useMemo(() => {
     if (!service) return 0;
     const base = service.basePriceNaira * qty;
@@ -517,7 +534,7 @@ export default function OrderView({
   const requiredOptionLabels = service?.optionFields
     ? missingRequiredOptionFields(service.optionFields, selectedOptions)
     : [];
-  const pickupValid = !!requestedPickupTime && isValidPickupISO(requestedPickupTime);
+  const pickupValid = !!requestedPickupTime && isValidPickupISO(requestedPickupTime, Date.now(), cal);
   const phoneValid = isValidNigerianPhone(phone);
 
   const canNext =

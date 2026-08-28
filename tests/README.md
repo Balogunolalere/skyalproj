@@ -53,8 +53,8 @@ Set environment variables before running:
 # Target API base (default: http://localhost:3000)
 API_BASE=http://localhost:3000
 
-# Agnes API key (for actual LLM testing - required for real API calls)
-AGNES_API_KEY=your-key-here
+# DeepSeek API key (for actual LLM testing - required for real API calls)
+DEEPSEEK_API_KEY=your-key-here
 
 # Paystack test keys (for payment tests)
 PAYSTACK_SECRET_KEY=sk_test_9bf956c2dd003fe655e372a1b34156316490163a
@@ -95,4 +95,4 @@ Test results are saved to `tests/evaluation-results.json` in JSON format.
 
 - The standalone evaluator requires a running Next.js server
 - For CI/CD, use the Vitest tests which mock the API calls
-- The Agnes API key is required for real LLM testing (the evaluator will skip tests that require actual API calls if the key is not set)
+- The DeepSeek API key is required for real LLM testing (the evaluator will skip tests that require actual API calls if the key is not set)

@@ -12,6 +12,12 @@ import {
 } from "@/lib/order";
 import { OptionFieldsBlock, RequiredOptionsHint } from "../OptionFieldsBlock";
 import { PickupDateTimePicker } from "../PickupDateTimePicker";
+import {
+  type BusinessCalendar,
+  DEFAULT_BUSINESS_CALENDAR,
+  fmtClock,
+  getBusinessCalendar,
+} from "@/lib/business-calendar";
 
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
@@ -89,6 +95,17 @@ export default function CalculatorView({
   const [delivery, setDelivery] = useState<DeliveryOption>("");
   // Required by the backend quote engine.
   const [requestedPickupTime, setRequestedPickupTime] = useState("");
+  // Configurable business calendar (open/close + observed public holidays).
+  const [cal, setCal] = useState<BusinessCalendar>(DEFAULT_BUSINESS_CALENDAR);
+  useEffect(() => {
+    let live = true;
+    getBusinessCalendar().then((c) => {
+      if (live) setCal(c);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
   // Service options (structured wins over legacy — never both).
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({});
   const [selectedVariant, setSelectedVariant] = useState("");
@@ -147,9 +164,9 @@ export default function CalculatorView({
       setQuoteError("Pick a service first.");
       return;
     }
-    if (!requestedPickupTime || !isValidPickupISO(requestedPickupTime)) {
+    if (!requestedPickupTime || !isValidPickupISO(requestedPickupTime, Date.now(), cal)) {
       setQuoteError(
-        "Pick a future weekday pickup time (Mon–Fri, 09:00–18:00 Lagos) first.",
+        `Pick a future working day pickup time (Mon–Fri, not a public holiday, ${fmtClock(cal.openMinute)}–${fmtClock(cal.closeMinute)} Lagos) first.`,
       );
       return;
     }
