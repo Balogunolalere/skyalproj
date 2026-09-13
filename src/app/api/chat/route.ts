@@ -14,6 +14,7 @@ import {
 } from "@/lib/chat";
 import { defaultPickupISO } from "@/lib/order";
 import { getBusinessCalendar } from "@/lib/business-calendar";
+import { getCatalogSnapshot, buildCatalogMessage } from "@/lib/chat-catalog";
 
 export const runtime = "nodejs";
 // Vercel function duration — required so slow DeepSeek calls (20-45s) aren't
@@ -370,8 +371,18 @@ export async function POST(req: NextRequest) {
         : generateSessionId();
 
     // Build DeepSeek messages (system prompt + sanitized history + current message)
+    //
+    // Ground the model in the LIVE catalog. The owner adds/renames/deactivates
+    // services in the admin Services page at any time, so a prompt-only roster
+    // goes stale and the assistant starts denying services we sell. Injected as
+    // a SECOND system message so the persona stays stable, and because the cache
+    // key below is derived from these messages a catalog change also invalidates
+    // the response cache automatically.
+    const catalog = await getCatalogSnapshot('SKYAL');
+
     const deepseekMsgs = [
       { role: 'system' as const, content: SKYAL_SYSTEM_PROMPT },
+      { role: 'system' as const, content: buildCatalogMessage(catalog) },
       ...sanitizedHistory,
       { role: 'user' as const, content: message },
     ];

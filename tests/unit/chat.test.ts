@@ -579,7 +579,11 @@ describe('system prompt contract — Nigerian context', () => {
 })
 
 describe('system prompt contract — SKYAL catalog keys', () => {
-  test('prompt lists the SKYAL service type keys (from the admin seed)', () => {
+  test('prompt does NOT hardcode type keys — they come from the live catalog', () => {
+    // These used to be asserted as REQUIRED prompt content. Keeping them in the
+    // prompt is exactly what caused the drift: services are editable in the admin
+    // UI, so the roster silently went stale and the assistant began denying
+    // services we sell. The keys now arrive in the injected LIVE SERVICE CATALOG.
     for (const key of [
       // fabric
       'fabric_sleeves', 'fabric_buba', 'fabric_buba_layer', 'fabric_wrapper', 'fabric_skirt',
@@ -595,8 +599,10 @@ describe('system prompt contract — SKYAL catalog keys', () => {
       // toppers / add-on
       'skyal_topper_acrylic', 'skyal_topper_custom', 'stoning_board',
     ]) {
-      expect(SKYAL_SYSTEM_PROMPT).toContain(key)
+      expect(SKYAL_SYSTEM_PROMPT).not.toContain(key)
     }
+    // ...and instead points the model at the injected catalog.
+    expect(SKYAL_SYSTEM_PROMPT).toContain('LIVE SERVICE CATALOG')
   })
 
   test('prompt does NOT list Paberin-only keys', () => {

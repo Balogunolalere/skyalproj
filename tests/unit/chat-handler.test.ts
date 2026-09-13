@@ -353,6 +353,20 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
     return () => DeepSeekMessages
   }
 
+  // messages[0] is the persona prompt and messages[1] is the injected LIVE
+  // SERVICE CATALOG — both system messages. Everything after them is the
+  // conversation, which is what these tests are about.
+  const SYSTEM_PREFIX = 2
+  const conversation = (messages: Array<{ role: string; content: string }>) =>
+    messages.slice(SYSTEM_PREFIX)
+
+  function expectSystemPrefix(messages: Array<{ role: string; content: string }>) {
+    expect(messages[0].role).toBe('system')
+    expect(messages[0].content).toContain('Skyal')
+    expect(messages[1].role).toBe('system')
+    expect(messages[1].content).toContain('LIVE SERVICE CATALOG')
+  }
+
   test('should thread user+assistant history to DeepSeek on follow-up messages', async () => {
     const getMessages = captureDeepSeek()
     const { status } = await send({
@@ -364,10 +378,11 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
     })
     expect(status).toBe(200)
     const messages = getMessages()
-    expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user'])
-    expect(messages[1].content).toBe('I need a buba')
-    expect(messages[2].content).toBe('Great! What material and how many?')
-    expect(messages[3].content).toBe('ok how much for 3?')
+    expectSystemPrefix(messages)
+    expect(conversation(messages).map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect(conversation(messages)[0].content).toBe('I need a buba')
+    expect(conversation(messages)[1].content).toBe('Great! What material and how many?')
+    expect(conversation(messages)[2].content).toBe('ok how much for 3?')
   })
 
   test('should thread the full conversation in the messages-array format', async () => {
@@ -381,9 +396,9 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
     })
     expect(status).toBe(200)
     const messages = getMessages()
-    expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user'])
-    expect(messages.map((m) => m.content)).toEqual([
-      expect.stringContaining('Skyal'),
+    expectSystemPrefix(messages)
+    expect(conversation(messages).map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect(conversation(messages).map((m) => m.content)).toEqual([
       'I need a buba',
       'Which material?',
       'ankara',
@@ -402,9 +417,10 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
     })
     expect(status).toBe(200)
     const messages = getMessages()
-    expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user'])
+    expectSystemPrefix(messages)
+    expect(conversation(messages).map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
     expect(messages.filter((m) => m.role === 'user' && m.content === 'how much?')).toHaveLength(1)
-    expect(messages[3].content).toBe('how much?')
+    expect(conversation(messages)[2].content).toBe('how much?')
   })
 
   test('should thread a separate message on top of the messages array without dropping turns', async () => {
@@ -419,9 +435,10 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
     })
     expect(status).toBe(200)
     const messages = getMessages()
-    expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user', 'user'])
-    expect(messages[3].content).toBe('ankara')
-    expect(messages[4].content).toBe('thanks!')
+    expectSystemPrefix(messages)
+    expect(conversation(messages).map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user'])
+    expect(conversation(messages)[2].content).toBe('ankara')
+    expect(conversation(messages)[3].content).toBe('thanks!')
   })
 
   test('should NOT fabricate context from sessionId alone', async () => {
@@ -433,10 +450,11 @@ describe('POST /api/chat — conversation threading (Bug 3 regression)', () => {
     })
     expect(status).toBe(200)
     const messages = getMessages()
-    // No history provided → only system + current turn; sessionId alone must
-    // never be used to reconstruct conversation context.
-    expect(messages.map((m) => m.role)).toEqual(['system', 'user'])
-    expect(messages[1].content).toBe('hello again')
+    // No history provided → only the system prefix + current turn; sessionId
+    // alone must never be used to reconstruct conversation context.
+    expectSystemPrefix(messages)
+    expect(conversation(messages).map((m) => m.role)).toEqual(['user'])
+    expect(conversation(messages)[0].content).toBe('hello again')
   })
 })
 
