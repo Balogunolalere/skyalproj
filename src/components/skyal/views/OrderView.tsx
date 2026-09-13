@@ -19,6 +19,7 @@ import {
 } from "@/lib/order";
 import { AvailabilityLine } from "../AvailabilityLine";
 import { AddressPicker } from "./AddressPicker";
+import { DesignFileThumbs } from "../DesignFilePreview";
 import { OptionFieldsBlock, RequiredOptionsHint } from "../OptionFieldsBlock";
 import { PickupDateTimePicker } from "../PickupDateTimePicker";
 import {
@@ -1190,6 +1191,11 @@ export default function OrderView({
                       }}
                     />
                   </label>
+                  {/* Thumbnails so the customer can confirm the right file was
+                      picked, right where they picked it. */}
+                  {uploadFiles.length > 0 && (
+                    <DesignFileThumbs files={uploadFiles} className="mt-2" />
+                  )}
                   {uploadFiles.length > 0 && (
                     <div className="mt-2 space-y-1">
                       {uploadFiles.map((f, i) => (
@@ -1372,6 +1378,15 @@ export default function OrderView({
                 {uploadFiles.length > 0 && <Row k="Design files" v={uploadFiles.map(f => f.name).join(', ')} />}
                 {notes && <Row k="Notes" v={notes} />}
               </dl>
+              {/* Last chance to catch a wrong attachment before paying. */}
+              {uploadFiles.length > 0 && (
+                <div className="mt-4">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-thread mb-2">
+                    Attached designs · click to enlarge
+                  </div>
+                  <DesignFileThumbs files={uploadFiles} />
+                </div>
+              )}
               <div className="mt-6 flex items-baseline justify-between bg-vellum border border-hairline p-5">
                 <div>
                   <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
