@@ -150,7 +150,19 @@ async function callAdminQuote(specs: ChatSpecs, customerPhone?: string): Promise
   );
 
   if (!res.ok) {
-    throw new Error(`Pricing engine error (${res.status})`);
+    // Carry the engine's own message (e.g. `Option "colour" is required`) so the
+    // caller can tell the customer what is actually missing, instead of implying
+    // a transient failure they should retry. Safe to read the body here: the
+    // success path's `res.json()` below is only reached when res.ok.
+    const detail: unknown = await res
+      .json()
+      .then((b: any) => b?.error?.message)
+      .catch(() => null);
+    throw new Error(
+      typeof detail === 'string' && detail
+        ? `Pricing engine error (${res.status}): ${detail}`
+        : `Pricing engine error (${res.status})`,
+    );
   }
   const json = await res.json().catch(() => null);
   const data = json?.data;
@@ -235,7 +247,13 @@ async function resolveExtras(
       assistantText = `${baseText}${priceLine(engine.quote)}`;
     } catch (err: any) {
       console.warn('[Skyal Chat] Engine quote failed:', err?.message);
-      assistantText = `${baseText}\n\nI couldn't confirm the exact price just now — please try again, or place your order and we'll confirm pricing.`;
+      // Name the real cause when the engine gave one (e.g. a missing required
+      // option) rather than implying a transient failure worth retrying.
+      const detail =
+        typeof err?.message === 'string' && /is required/i.test(err.message)
+          ? '\n\nOne required detail is missing for this item — tell me the option value (for example the colour) and I\'ll price it exactly.'
+          : '';
+      assistantText = `${baseText}\n\nI couldn't confirm the exact price automatically.${detail} You can also place the order and we'll confirm the price for you.`;
     }
   } else if (specs?.custom_description) {
     // Tier 2 — custom job: hand off to the provisional-order flow.
