@@ -66,10 +66,29 @@ export interface CatalogSnapshot {
 
 /* ───────────────────────────── rendering ───────────────────────────── */
 
-function truncate(text: string, max: number): string {
-  const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
+/**
+ * Drop control and zero-width characters.
+ *
+ * The digest is a ONE-LINE-PER-SERVICE format that the model is told to trust,
+ * so an unsanitised newline (or U+2028) inside any field would forge an entire
+ * fake service line. Legitimate catalog values never contain control
+ * characters, so this is a no-op on real data.
+ */
+function stripControlChars(value: string): string {
+  return value.replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200D\u2028\u2029\uFEFF]/g, ' ');
+}
+
+/** Flatten to one clean, length-capped line. */
+function truncate(value: unknown, max: number): string {
+  const clean = stripControlChars(String(value ?? '')).replace(/\s+/g, ' ').trim();
   return clean.length <= max ? clean : `${clean.slice(0, max - 1).trimEnd()}…`;
 }
+
+/** Per-field caps — generous for real data, bounded against a runaway row. */
+const MAX_TYPE_CHARS = 120;
+const MAX_LABEL_CHARS = 120;
+const MAX_CHOICE_CHARS = 40;
+const MAX_SHORT_CHARS = 60;
 
 /** Flatten dropdown choices to their values — images are UI-only. */
 function choiceValues(service: CatalogService): string[] {
@@ -78,11 +97,15 @@ function choiceValues(service: CatalogService): string[] {
     if (field?.type === 'dropdown' && Array.isArray(field.choices) && field.choices.length > 0) {
       return field.choices
         .map((c) => (typeof c === 'string' ? c : (c as { value?: unknown })?.value))
-        .filter((v): v is string => typeof v === 'string' && v.length > 0);
+        .filter((v): v is string => typeof v === 'string' && v.length > 0)
+        .map((v) => truncate(v, MAX_CHOICE_CHARS))
+        .filter(Boolean);
     }
   }
   // Legacy flat options string array.
-  return Array.isArray(service.options) ? service.options.filter(Boolean) : [];
+  return Array.isArray(service.options)
+    ? service.options.map((v) => truncate(v, MAX_CHOICE_CHARS)).filter(Boolean)
+    : [];
 }
 
 /**
@@ -90,16 +113,17 @@ function choiceValues(service: CatalogService): string[] {
  *
  * Format: `type | label | category | unit | lead time | express | options | description`
  *
- * No prices — see the module header. Price and surcharge fields are
+ * Every field is flattened and capped, so the result is always exactly one
+ * line. No prices — see the module header. Price and surcharge fields are
  * intentionally never read here.
  */
 export function formatServiceLine(service: CatalogService): string {
   const parts: string[] = [
-    service.type,
-    service.label,
-    String(service.category ?? 'other').toLowerCase(),
-    service.unit ?? 'per item',
-    service.standardLeadTime ?? 'standard',
+    truncate(service.type, MAX_TYPE_CHARS),
+    truncate(service.label, MAX_LABEL_CHARS),
+    truncate(service.category, MAX_SHORT_CHARS).toLowerCase() || 'other',
+    truncate(service.unit, MAX_SHORT_CHARS) || 'per item',
+    truncate(service.standardLeadTime, MAX_SHORT_CHARS) || 'standard',
     service.allowExpress ? 'express available' : 'no express',
   ];
 
@@ -163,13 +187,20 @@ export function digestHash(digest: string): string {
 
 /* ───────────────────────────── fetching ───────────────────────────── */
 
-let cached: CatalogSnapshot | null = null;
-let inFlight: Promise<CatalogSnapshot | null> | null = null;
+/**
+ * Cache keyed by brand+apiUrl. Each deployment only ever asks for its own brand,
+ * but a process serving both (or a test) must never be handed the wrong
+ * catalogue, so the key includes the brand instead of assuming single-tenancy.
+ */
+const snapshotCache = new Map<string, CatalogSnapshot>();
+const inFlight = new Map<string, Promise<CatalogSnapshot | null>>();
+
+const cacheKeyFor = (brand: string, apiUrl: string) => `${brand.toUpperCase()}::${apiUrl}`;
 
 /** Test hook — drops the module-scope cache. */
 export function __resetCatalogCache(): void {
-  cached = null;
-  inFlight = null;
+  snapshotCache.clear();
+  inFlight.clear();
 }
 
 async function fetchCatalog(brand: string, apiUrl: string): Promise<CatalogSnapshot | null> {
@@ -219,23 +250,27 @@ export async function getCatalogSnapshot(
   brand = 'SKYAL',
   apiUrl = process.env.NEXT_PUBLIC_ADMIN_API_URL || 'https://skyalxpaberin-admin.vercel.app',
 ): Promise<CatalogSnapshot | null> {
+  const key = cacheKeyFor(brand, apiUrl);
   const now = Date.now();
-  if (cached && now - cached.fetchedAt < CATALOG_TTL_MS) return cached;
+  const hit = snapshotCache.get(key);
+  if (hit && now - hit.fetchedAt < CATALOG_TTL_MS) return hit;
 
-  if (!inFlight) {
-    inFlight = fetchCatalog(brand, apiUrl).finally(() => {
-      inFlight = null;
+  let pending = inFlight.get(key);
+  if (!pending) {
+    pending = fetchCatalog(brand, apiUrl).finally(() => {
+      inFlight.delete(key);
     });
+    inFlight.set(key, pending);
   }
-  const fresh = await inFlight;
+  const fresh = await pending;
 
   if (fresh) {
-    cached = fresh;
-    return cached;
+    snapshotCache.set(key, fresh);
+    return fresh;
   }
   // Fetch failed: serve the last known good snapshot rather than grounding the
   // model in nothing (which is what caused confident wrong answers before).
-  return cached;
+  return hit ?? null;
 }
 
 /* ───────────────────────────── injection ───────────────────────────── */
