@@ -14,7 +14,7 @@ import {
 } from "@/lib/chat";
 import { defaultPickupISO } from "@/lib/order";
 import { getBusinessCalendar } from "@/lib/business-calendar";
-import { getCatalogSnapshot, buildCatalogMessage } from "@/lib/chat-catalog";
+import { getCatalogSnapshot, buildCatalogMessage, resolveServiceType } from "@/lib/chat-catalog";
 
 export const runtime = "nodejs";
 // Vercel function duration — required so slow DeepSeek calls (20-45s) aren't
@@ -99,13 +99,24 @@ function isRetryableError(error: unknown): boolean {
  * Same endpoint the order form uses — one number everywhere.
  */
 async function callAdminQuote(specs: ChatSpecs, customerPhone?: string): Promise<{ quote: NonNullable<ChatResponse['quote']>; availability: unknown }> {
+  // Resolve the model's type key against the catalog it was shown. The engine
+  // matches EXACTLY and keys are not uniformly cased, so a model that re-cases
+  // the key would otherwise make a real service unpriceable. Cached + coalesced,
+  // so this costs nothing on top of the fetch the request already made.
+  const catalog = await getCatalogSnapshot('SKYAL');
+  const serviceType = resolveServiceType(specs.service_type, catalog?.types ?? []) ?? specs.service_type;
+
   const payload = {
     brand: 'SKYAL',
-    serviceType: specs.service_type,
+    serviceType,
     quantity: specs.quantity,
     sla: specs.sla || 'Standard',
     deliveryMethod: specs.delivery,
     deliveryAddress: specs.delivery === 'LOCAL_DELIVERY' ? specs.delivery_address : undefined,
+    // Required option values (e.g. a topper colour). Without these the engine
+    // returns 400 `Option "colour" is required` and the customer gets no price
+    // at all — every topper was unpriceable through chat before this.
+    ...(specs.selected_options ? { selectedOptions: specs.selected_options } : {}),
     // The engine rejects quotes without a pickup time — when the customer
     // never gave a deadline, default to now + 2 working days at one hour
     // before closing (16:00 Lagos by default), within the CONFIGURED

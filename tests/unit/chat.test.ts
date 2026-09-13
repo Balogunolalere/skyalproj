@@ -102,9 +102,51 @@ describe('parseSpecsBlock — structured [SPECS] extraction', () => {
     expect(parseSpecsBlock('[SPECS] {"service_type":"x","quantity":"abc"} [/SPECS]')!.quantity).toBe(1)
   })
 
-  test('should normalize service_type to lowercase', () => {
+  test('preserves service_type casing so mixed-case catalog keys survive', () => {
+    // The engine matches type keys EXACTLY and owner-authored keys are not
+    // uniformly cased. Lowercasing here made real services unpriceable; the route
+    // now resolves the canonical key against the catalog instead of mangling the
+    // model's answer.
+    const specs = parseSpecsBlock('[SPECS] {"service_type":"skyal_topper_Acrylic","quantity":1} [/SPECS]')
+    expect(specs!.service_type).toBe('skyal_topper_Acrylic')
+  })
+
+  test('preserves an upper-case service_type verbatim', () => {
     const specs = parseSpecsBlock('[SPECS] {"service_type":"FABRIC_BUBA","quantity":1} [/SPECS]')
-    expect(specs!.service_type).toBe('fabric_buba')
+    expect(specs!.service_type).toBe('FABRIC_BUBA')
+  })
+
+  test('captures selected_options keyed exactly as the catalog shows them', () => {
+    const specs = parseSpecsBlock(
+      '[SPECS] {"service_type":"skyal_topper_acrylic","quantity":1,"selected_options":{"colour":"Gold","message":"Ada"}} [/SPECS]'
+    )
+    expect(specs!.selected_options).toEqual({ colour: 'Gold', message: 'Ada' })
+  })
+
+  test('coerces numeric option values to strings', () => {
+    const specs = parseSpecsBlock(
+      '[SPECS] {"service_type":"x","quantity":1,"selected_options":{"age":30}} [/SPECS]'
+    )
+    expect(specs!.selected_options).toEqual({ age: '30' })
+  })
+
+  test('accepts camelCase selectedOptions as well', () => {
+    const specs = parseSpecsBlock(
+      '[SPECS] {"service_type":"x","quantity":1,"selectedOptions":{"colour":"Red"}} [/SPECS]'
+    )
+    expect(specs!.selected_options).toEqual({ colour: 'Red' })
+  })
+
+  test('drops empty and non-scalar option values', () => {
+    const specs = parseSpecsBlock(
+      '[SPECS] {"service_type":"x","quantity":1,"selected_options":{"ok":"Gold","blank":"  ","obj":{"a":1},"nul":null}} [/SPECS]'
+    )
+    expect(specs!.selected_options).toEqual({ ok: 'Gold' })
+  })
+
+  test('omits selected_options entirely when nothing valid is supplied', () => {
+    const specs = parseSpecsBlock('[SPECS] {"service_type":"x","quantity":1} [/SPECS]')
+    expect(specs!.selected_options).toBeUndefined()
   })
 
   test('should treat empty service_type as null (custom)', () => {

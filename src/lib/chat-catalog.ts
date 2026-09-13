@@ -29,8 +29,14 @@ export interface CatalogService {
   customerSupplied?: boolean;
   /** Legacy flat dropdown choices. */
   options?: string[];
-  /** Django-style structured fields; only dropdown choices feed the digest. */
-  optionFields?: Array<{ key?: string; label?: string; type?: string; choices?: unknown[] }> | null;
+  /** Django-style structured fields; the digest renders these as `fields:`. */
+  optionFields?: Array<{
+    key?: string;
+    label?: string;
+    type?: string;
+    required?: boolean;
+    choices?: unknown[];
+  }> | null;
 }
 
 /** How long a fetched catalog is reused before re-reading the source of truth. */
@@ -60,6 +66,13 @@ export interface CatalogSnapshot {
   count: number;
   /** Services omitted because the digest hit `MAX_DIGEST_CHARS` (normally 0). */
   dropped: number;
+  /**
+   * Canonical type keys present in the digest. The pricing engine matches type
+   * keys exactly, so the route resolves the model's answer against these rather
+   * than trusting its casing. Optional so callers that only render a message
+   * need not fabricate it — `fetchCatalog` always populates it.
+   */
+  types?: string[];
   /** When the underlying fetch succeeded. */
   fetchedAt: number;
 }
@@ -91,27 +104,66 @@ const MAX_CHOICE_CHARS = 40;
 const MAX_SHORT_CHARS = 60;
 
 /** Flatten dropdown choices to their values — images are UI-only. */
-function choiceValues(service: CatalogService): string[] {
-  const fields = service.optionFields ?? [];
-  for (const field of fields) {
-    if (field?.type === 'dropdown' && Array.isArray(field.choices) && field.choices.length > 0) {
-      return field.choices
-        .map((c) => (typeof c === 'string' ? c : (c as { value?: unknown })?.value))
-        .filter((v): v is string => typeof v === 'string' && v.length > 0)
-        .map((v) => truncate(v, MAX_CHOICE_CHARS))
-        .filter(Boolean);
-    }
-  }
-  // Legacy flat options string array.
+function normalizeChoices(choices: unknown): string[] {
+  if (!Array.isArray(choices)) return [];
+  return choices
+    .map((c) => (typeof c === 'string' ? c : (c as { value?: unknown })?.value))
+    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    .map((v) => truncate(v, MAX_CHOICE_CHARS))
+    .filter(Boolean);
+}
+
+/**
+ * Describe a service's option fields so the model can FILL them.
+ *
+ * The field KEY is the load-bearing part: the engine only prices an order once
+ * every required field arrives in `selectedOptions` under its exact key, and the
+ * model cannot guess a key it has never been shown. Without this, every topper
+ * service was unpriceable through chat.
+ *
+ * Format: `fields: colour=Gold|Silver|Red REQUIRED, message=text REQUIRED`
+ */
+function fieldSpec(service: CatalogService): string {
+  const fields = (service.optionFields ?? []).filter(Boolean);
+  if (fields.length === 0) return '';
+  const rendered = fields.map((field) => {
+    const key = truncate(field.key, MAX_CHOICE_CHARS) || 'field';
+    const type = truncate(field.type, 20) || 'text';
+    const values = field.type === 'dropdown' ? normalizeChoices(field.choices) : [];
+    const kind = values.length > 0 ? values.join('|') : type === 'number' ? 'number' : 'text';
+    return `${key}=${kind}${field.required ? ' REQUIRED' : ''}`;
+  });
+  return `fields: ${rendered.join(', ')}`;
+}
+
+/** Legacy flat option list, for services with no structured fields. */
+function legacyChoices(service: CatalogService): string[] {
   return Array.isArray(service.options)
     ? service.options.map((v) => truncate(v, MAX_CHOICE_CHARS)).filter(Boolean)
     : [];
 }
 
 /**
+ * Resolve a model-emitted service type to the catalog's canonical key.
+ *
+ * The engine matches type keys EXACTLY and they are owner-authored, so they are
+ * not uniformly cased. Matching case-insensitively and returning the catalog's
+ * own spelling keeps a correct-but-re-cased answer priceable.
+ */
+export function resolveServiceType(candidate: unknown, types: readonly string[]): string | null {
+  if (typeof candidate !== 'string') return null;
+  const wanted = candidate.trim();
+  if (!wanted) return null;
+  const exact = types.find((t) => t === wanted);
+  if (exact) return exact;
+  const lower = wanted.toLowerCase();
+  return types.find((t) => t.toLowerCase() === lower) ?? null;
+}
+
+/**
  * Render one service as a single deterministic line.
  *
- * Format: `type | label | category | unit | lead time | express | options | description`
+ * Format: `type | label | category | unit | lead time | express | fields | description`
  *
  * Every field is flattened and capped, so the result is always exactly one
  * line. No prices — see the module header. Price and surcharge fields are
@@ -129,8 +181,12 @@ export function formatServiceLine(service: CatalogService): string {
 
   if (service.customerSupplied) parts.push('customer supplies the item');
 
-  const choices = choiceValues(service);
-  if (choices.length > 0) parts.push(`choices: ${choices.join(', ')}`);
+  const fields = fieldSpec(service);
+  if (fields) parts.push(fields);
+  else {
+    const choices = legacyChoices(service);
+    if (choices.length > 0) parts.push(`choices: ${choices.join(', ')}`);
+  }
 
   const desc = truncate(service.description ?? '', MAX_DESCRIPTION_CHARS);
   if (desc) parts.push(desc);
@@ -138,12 +194,12 @@ export function formatServiceLine(service: CatalogService): string {
   return `- ${parts.join(' | ')}`;
 }
 
-/** Valid, renderable rows only, stably ordered. */
-function renderLines(services: CatalogService[]): string[] {
+/** Digest rows — raw type key kept alongside the rendered line, sorted by type. */
+function renderRows(services: CatalogService[]): Array<{ type: string; line: string }> {
   return [...(services ?? [])]
     .filter((s) => s && s.type && s.label)
     .sort((a, b) => a.type.localeCompare(b.type))
-    .map(formatServiceLine);
+    .map((s) => ({ type: s.type, line: formatServiceLine(s) }));
 }
 
 /** Digest plus how much of the catalog made it in. */
@@ -151,16 +207,23 @@ export function buildCatalogDigestWithStats(services: CatalogService[]): {
   digest: string;
   included: number;
   dropped: number;
+  /** Canonical type keys present in the digest, for exact-match resolution. */
+  types: string[];
 } {
-  const lines = renderLines(services);
-  const kept: string[] = [];
+  const rows = renderRows(services);
+  const kept: typeof rows = [];
   let used = 0;
-  for (const line of lines) {
-    if (used + line.length + 1 > MAX_DIGEST_CHARS) break;
-    kept.push(line);
-    used += line.length + 1;
+  for (const row of rows) {
+    if (used + row.line.length + 1 > MAX_DIGEST_CHARS) break;
+    kept.push(row);
+    used += row.line.length + 1;
   }
-  return { digest: kept.join('\n'), included: kept.length, dropped: lines.length - kept.length };
+  return {
+    digest: kept.map((r) => r.line).join('\n'),
+    included: kept.length,
+    dropped: rows.length - kept.length,
+    types: kept.map((r) => r.type),
+  };
 }
 
 /**
@@ -216,7 +279,7 @@ async function fetchCatalog(brand: string, apiUrl: string): Promise<CatalogSnaps
       : Array.isArray(body)
         ? body
         : [];
-    const { digest, included, dropped } = buildCatalogDigestWithStats(services);
+    const { digest, included, dropped, types } = buildCatalogDigestWithStats(services);
     if (!digest) return null;
     if (dropped > 0) {
       // Deliberately loud — a partially-grounded model is how we got here.
@@ -230,6 +293,7 @@ async function fetchCatalog(brand: string, apiUrl: string): Promise<CatalogSnaps
       hash: digestHash(digest),
       count: services.length,
       dropped,
+      types,
       fetchedAt: Date.now(),
     };
   } catch {
@@ -327,6 +391,13 @@ Rules:
 - Never state or imply that Skyal cannot do something that appears here.
 - If the customer's request is NOT on this list, do not say we can't do it.
   Say you'll confirm with the team, then describe it in "custom_description".
+- When an entry lists "fields:", every field marked REQUIRED must be filled in a
+  "selected_options" object inside the [SPECS] block, keyed EXACTLY as shown
+  (e.g. "fields: colour=Gold|Silver|Red REQUIRED" → "selected_options":
+  {"colour":"Gold"}). Ask the customer for any required value you are missing
+  BEFORE emitting [SPECS] — without them the exact price cannot be calculated.
+- When an entry says "customer supplies the item", the customer brings that
+  material or item to us. Say so plainly and never imply we provide it.
 
 (catalog ${snapshot.hash} · ${snapshot.count} active services)`;
 }

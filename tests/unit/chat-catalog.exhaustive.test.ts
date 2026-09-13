@@ -146,7 +146,7 @@ describe('formatServiceLine — field boundaries', () => {
 
   it('flattens object choices (including image choices) to plain values', () => {
     const line = formatServiceLine(ACRYLIC_TOPPER);
-    expect(line).toContain('choices: Gold, Silver');
+    expect(line).toContain('fields: colour=Gold|Silver');
     expect(line).not.toContain('cdn.example');
   });
 

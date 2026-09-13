@@ -55,6 +55,15 @@ export interface ChatSpecs {
   needs_design_upload?: boolean;
   /** ISO pickup time when the customer gave a deadline (validated on parse). */
   requested_pickup_time?: string;
+  /**
+   * Values for the catalog entry's option fields, keyed exactly as the catalog
+   * shows them (e.g. `{ colour: 'Gold', message: 'Ada' }`).
+   *
+   * Required for any service whose catalog entry lists REQUIRED fields — the
+   * engine refuses to price without them, which is why every topper was
+   * unpriceable through chat before this existed.
+   */
+  selected_options?: Record<string, string>;
 }
 
 /** Material availability surfaced by the admin pricing engine. */
@@ -392,10 +401,35 @@ export function parseSpecsBlock(text: string): ChatSpecs | undefined {
   const q = parseLenientJson(match[1]);
   if (!q) return undefined;
 
+  // NOTE: NOT lowercased. The pricing engine matches type keys EXACTLY, and keys
+  // are owner-authored so they are not uniformly cased. Lowercasing here made
+  // real services unpriceable; the route resolves the canonical key instead.
   const serviceType =
     typeof q.service_type === 'string' && q.service_type.trim()
-      ? q.service_type.trim().toLowerCase()
+      ? q.service_type.trim().slice(0, 200)
       : null;
+
+  // Option selections, keyed EXACTLY as the catalog shows them. Keys are never
+  // re-cased (the engine matches them exactly); values are coerced to strings so
+  // a numeric answer still arrives in the shape the engine validates. Required
+  // fields live here — without them the engine refuses to price a topper.
+  const rawOptions =
+    q.selected_options && typeof q.selected_options === 'object' && !Array.isArray(q.selected_options)
+      ? (q.selected_options as Record<string, unknown>)
+      : q.selectedOptions && typeof q.selectedOptions === 'object' && !Array.isArray(q.selectedOptions)
+        ? (q.selectedOptions as Record<string, unknown>)
+        : null;
+  const selectedOptions: Record<string, string> = {};
+  if (rawOptions) {
+    for (const [key, value] of Object.entries(rawOptions)) {
+      const k = String(key).trim().slice(0, 80);
+      if (!k || value === null || value === undefined || typeof value === 'object') continue;
+      const v = String(value).trim().slice(0, 200);
+      if (!v) continue;
+      selectedOptions[k] = v;
+      if (Object.keys(selectedOptions).length >= 20) break;
+    }
+  }
 
   const deliveryRaw = typeof q.delivery === 'string' ? q.delivery.trim().toUpperCase() : '';
   const delivery = deliveryRaw === 'LOCAL_DELIVERY' || deliveryRaw === 'PICKUP' ? (deliveryRaw as ChatSpecs['delivery']) : undefined;
@@ -422,6 +456,7 @@ export function parseSpecsBlock(text: string): ChatSpecs | undefined {
     delivery_address: typeof q.delivery_address === 'string' ? q.delivery_address.trim().slice(0, 500) : undefined,
     needs_design_upload: q.needs_design_upload === true,
     requested_pickup_time,
+    selected_options: Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
   };
 }
 
