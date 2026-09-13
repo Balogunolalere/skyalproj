@@ -190,6 +190,10 @@ function OptionFieldInput({
             onChange={(e) => onChange(e.target.value)}
             className={`${inputClass} resize-none`}
           />
+          {/* This value is reproduced verbatim on the finished piece. */}
+          <p className="text-xs text-thread/70 mt-1.5">
+            Case sensitive — write it exactly as you want it produced.
+          </p>
         </div>
       );
     case "number":
@@ -222,6 +226,10 @@ function OptionFieldInput({
             onChange={(e) => onChange(e.target.value)}
             className={inputClass}
           />
+          {/* This value is reproduced verbatim on the finished piece. */}
+          <p className="text-xs text-thread/70 mt-1.5">
+            Case sensitive — write it exactly as you want it produced.
+          </p>
         </div>
       );
   }
