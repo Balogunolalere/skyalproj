@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# One run per ref: a pushed fix cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Type errors used to be ignored by next.config (ignoreBuildErrors) and
+      # nothing ran the suite. Both are gated here now.
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Tests
+        run: pnpm test
+
+      - name: Lint
+        run: pnpm lint
+
+      # The build is the last gate: it catches module-resolution failures
+      # (importing a server-only module into a client component) that tsc cannot.
+      - name: Build
+        run: pnpm build
