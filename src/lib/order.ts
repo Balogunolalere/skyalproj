@@ -89,6 +89,70 @@ export function missingRequiredOptionFields(
     .map((f) => f.label);
 }
 
+/** Per-field option problems, keyed by field key (the message shown under the input). */
+export interface OptionValuesValidation {
+  valid: boolean;
+  errors: Record<string, string>;
+}
+
+/**
+ * Client-side copy of the backend's option contract (`validateOptionSelection`):
+ * required, number bounds, text length, and "is this still a listed choice".
+ *
+ * `missingRequiredOptionFields` answers only the required half — everything else
+ * here would otherwise reach the server and come back as a 400
+ * INVALID_ORDER_INPUT *after* the customer pressed the order button, which is
+ * exactly the wrong moment to tell them a number was out of range.
+ */
+export function validateOptionValues(
+  fields: OptionField[] | null | undefined,
+  values: Record<string, string>,
+): OptionValuesValidation {
+  const errors: Record<string, string> = {};
+  for (const field of fields ?? []) {
+    const text = (values[field.key] ?? "").trim();
+    if (!text) {
+      if (field.required) errors[field.key] = `${field.label} is required`;
+      continue;
+    }
+    if (field.type === "number") {
+      const n = Number(text);
+      // The backend demands a WHOLE number (`Number.isInteger`), not merely a
+      // finite one — "2.5" is rejected there, so it must not pass here.
+      if (!Number.isInteger(n)) errors[field.key] = `${field.label} must be a whole number`;
+      else if (typeof field.min === "number" && n < field.min)
+        errors[field.key] = `${field.label} must be at least ${field.min}`;
+      else if (typeof field.max === "number" && n > field.max)
+        errors[field.key] = `${field.label} must be at most ${field.max}`;
+      continue;
+    }
+    if (typeof field.maxLength === "number" && text.length > field.maxLength) {
+      errors[field.key] = `${field.label} must be at most ${field.maxLength} characters`;
+      continue;
+    }
+    if (field.type === "dropdown") {
+      // No choices configured means NOTHING can be valid: the backend looks the
+      // value up in the list (`choices?.find` → undefined → invalid choice).
+      const choices = normalizeChoices(field.choices);
+      if (!choices.some((c) => c.value === text)) {
+        errors[field.key] = `${field.label} must be one of the listed options`;
+      }
+    }
+  }
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
+/**
+ * One line naming what is wrong, for a banner: the first two problems, so a
+ * customer with three empty fields is not read a paragraph.
+ */
+export function summarizeOptionErrors(errors: Record<string, string>): string | null {
+  const messages = Object.values(errors).filter(Boolean);
+  if (messages.length === 0) return null;
+  const head = messages.slice(0, 2).join("; ");
+  return messages.length > 2 ? `${head}; +${messages.length - 2} more` : head;
+}
+
 /* ───────────────────────────── Phone validation ───────────────────────────── */
 
 /** Strip spaces, dashes and parens before matching (backend accepts them). */

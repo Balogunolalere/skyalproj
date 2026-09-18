@@ -15,6 +15,8 @@ import {
   isValidNigerianPhone,
   isValidPickupISO,
   missingRequiredOptionFields,
+  summarizeOptionErrors,
+  validateOptionValues,
   pickupTierPct,
   type OptionField,
 } from "@/lib/order";
@@ -528,6 +530,9 @@ export default function OrderView({
   const requiredOptionLabels = service?.optionFields
     ? missingRequiredOptionFields(service.optionFields, selectedOptions)
     : [];
+  // Full contract (required + bounds + length + still-a-listed-choice), so the
+  // step cannot advance into a payload the backend will reject.
+  const optionValidation = validateOptionValues(service?.optionFields, selectedOptions);
   const pickupValid = !!requestedPickupTime && isValidPickupISO(requestedPickupTime, Date.now(), cal);
   const phoneValid = isValidNigerianPhone(phone);
 
@@ -536,7 +541,7 @@ export default function OrderView({
     (step === 1 &&
       (customMode
         ? qty > 0 && !!customDescription.trim()
-        : qty > 0 && requiredOptionLabels.length === 0)) ||
+        : qty > 0 && optionValidation.valid)) ||
     (step === 2 && pickupValid) ||
     (step === 3 && (delivery === "pickup" || address.trim().length > 4)) ||
     (step === 4 && !!name.trim() && phoneValid) ||
@@ -546,6 +551,13 @@ export default function OrderView({
     setSubmitting(true);
     setSubmitError(null);
     try {
+      // Defence in depth: the wizard's step gate should make this unreachable,
+      // but a rejected option is a 400 the customer cannot act on.
+      if (!optionValidation.valid) {
+        setSubmitError(summarizeOptionErrors(optionValidation.errors) ?? "Please complete the options.");
+        setSubmitting(false);
+        return;
+      }
       // Step 0: Upload design files to Cloudinary if present (best-effort, non-blocking)
       // Max 5 files, 10MB each, 25MB total (limits hoisted to module scope)
       const uploadedFiles: { url: string; publicId: string; name: string }[] = [];
@@ -1107,6 +1119,7 @@ export default function OrderView({
                       onChange={setSelectedOptions}
                       variant={selectedVariant}
                       onVariantChange={setSelectedVariant}
+                      errors={optionValidation.errors}
                     />
                     <RequiredOptionsHint missing={requiredOptionLabels} />
                   </div>

@@ -9,6 +9,8 @@ import {
   buildQuotePayload,
   isValidPickupISO,
   missingRequiredOptionFields,
+  summarizeOptionErrors,
+  validateOptionValues,
   type OptionField,
 } from "@/lib/order";
 import { OptionFieldsBlock, RequiredOptionsHint } from "../OptionFieldsBlock";
@@ -108,6 +110,9 @@ export default function CalculatorView({
   }, []);
   // Service options (structured wins over legacy — never both).
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({});
+  /** Per-field option errors, shown only after a calculate/submit attempt and
+   *  cleared for each field the customer then edits. */
+  const [optionErrors, setOptionErrors] = useState<Record<string, string>>({});
   const [selectedVariant, setSelectedVariant] = useState("");
 
   const [breakdown, setBreakdown] = useState<QuoteBreakdown | null>(null);
@@ -164,11 +169,13 @@ export default function CalculatorView({
       );
       return;
     }
-    const missing = selectedService?.optionFields
-      ? missingRequiredOptionFields(selectedService.optionFields, selectedOptions)
-      : [];
-    if (missing.length > 0) {
-      setQuoteError(`Required options: ${missing.join(", ")}`);
+    // The whole option contract, not just "is it filled in": a number out of
+    // range or a stale choice used to travel to the server and come back as a
+    // 400 INVALID_ORDER_INPUT.
+    const opts = validateOptionValues(selectedService?.optionFields, selectedOptions);
+    setOptionErrors(opts.errors);
+    if (!opts.valid) {
+      setQuoteError(summarizeOptionErrors(opts.errors) ?? "Please complete the required options.");
       return;
     }
     setQuoteLoading(true);
@@ -283,9 +290,21 @@ export default function CalculatorView({
                     <OptionFieldsBlock
                       service={selectedService}
                       values={selectedOptions}
-                      onChange={setSelectedOptions}
+                      onChange={(next) => {
+                        // Clear the error on the field being edited, keep the rest.
+                        const changed = Object.keys(next).filter((k) => next[k] !== selectedOptions[k]);
+                        setSelectedOptions(next);
+                        if (changed.some((k) => optionErrors[k])) {
+                          setOptionErrors((prev) => {
+                            const rest = { ...prev };
+                            for (const k of changed) delete rest[k];
+                            return rest;
+                          });
+                        }
+                      }}
                       variant={selectedVariant}
                       onVariantChange={setSelectedVariant}
+                      errors={optionErrors}
                     />
                     <RequiredOptionsHint
                       missing={

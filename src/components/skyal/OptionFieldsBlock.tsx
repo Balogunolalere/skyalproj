@@ -22,6 +22,7 @@ export function OptionFieldsBlock({
   onChange,
   variant,
   onVariantChange,
+  errors,
 }: {
   service: ServiceOptionShape;
   /** Structured field values (key → string). */
@@ -30,6 +31,8 @@ export function OptionFieldsBlock({
   /** Legacy flat-option selection. */
   variant: string;
   onVariantChange: (variant: string) => void;
+  /** Per-field problems from `validateOptionValues`, shown under each input. */
+  errors?: Record<string, string>;
 }) {
   const fields = Array.isArray(service.optionFields) ? service.optionFields : [];
   if (fields.length > 0) {
@@ -41,6 +44,7 @@ export function OptionFieldsBlock({
             field={field}
             value={values[field.key] ?? ""}
             onChange={(v) => onChange({ ...values, [field.key]: v })}
+            error={errors?.[field.key]}
           />
         ))}
       </div>
@@ -78,11 +82,18 @@ function OptionFieldInput({
   field,
   value,
   onChange,
+  error,
 }: {
   field: OptionField;
   value: string;
   onChange: (v: string) => void;
+  error?: string;
 }) {
+  const errorLine = error ? (
+    <p role="alert" className="text-xs text-oxblood mt-1.5">
+      {error}
+    </p>
+  ) : null;
   const requiredMark = field.required ? (
     <span className="text-laser" title="Required">
       {" "}*
@@ -164,8 +175,9 @@ function OptionFieldInput({
             id={`option-${field.key}`}
             value={value}
             required={field.required}
+            aria-invalid={!!error}
             onChange={(e) => onChange(e.target.value)}
-            className={inputClass}
+            className={`${inputClass}${error ? " border-oxblood" : ""}`}
           >
             <option value="">{field.required ? "Select…" : "None"}</option>
             {choices.map((choice) => (
@@ -174,6 +186,7 @@ function OptionFieldInput({
               </option>
             ))}
           </select>
+          {errorLine}
         </div>
       );
     }
@@ -187,9 +200,11 @@ function OptionFieldInput({
             required={field.required}
             maxLength={field.maxLength}
             rows={3}
+            aria-invalid={!!error}
             onChange={(e) => onChange(e.target.value)}
-            className={`${inputClass} resize-none`}
+            className={`${inputClass}${error ? " border-oxblood" : ""} resize-none`}
           />
+          {errorLine}
           {/* This value is reproduced verbatim on the finished piece. */}
           <p className="text-xs text-thread/70 mt-1.5">
             Case sensitive — write it exactly as you want it produced.
@@ -207,9 +222,11 @@ function OptionFieldInput({
             required={field.required}
             min={field.min}
             max={field.max}
+            aria-invalid={!!error}
             onChange={(e) => onChange(e.target.value)}
-            className={inputClass}
+            className={`${inputClass}${error ? " border-oxblood" : ""}`}
           />
+          {errorLine}
         </div>
       );
     case "text":
@@ -223,9 +240,11 @@ function OptionFieldInput({
             value={value}
             required={field.required}
             maxLength={field.maxLength}
+            aria-invalid={!!error}
             onChange={(e) => onChange(e.target.value)}
-            className={inputClass}
+            className={`${inputClass}${error ? " border-oxblood" : ""}`}
           />
+          {errorLine}
           {/* This value is reproduced verbatim on the finished piece. */}
           <p className="text-xs text-thread/70 mt-1.5">
             Case sensitive — write it exactly as you want it produced.
