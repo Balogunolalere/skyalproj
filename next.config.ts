@@ -2,10 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  /* config options here */
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  // Type errors fail the build. `tsc --noEmit` is clean on this repo, so the
+  // flag bought nothing but let any future type error ship silently.
   reactStrictMode: false,
   allowedDevOrigins: ['127.0.0.1'],
 };
