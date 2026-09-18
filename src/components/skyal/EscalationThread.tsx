@@ -16,10 +16,9 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { apiFetch, ApiError } from "@/lib/api";
 import { Loader2, Send } from "lucide-react";
 
-const API_URL =
-  process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
 interface EscalationMessage {
   id: string;
@@ -91,23 +90,17 @@ export function EscalationThread({ ticketId, phone, customerName, onResolved }: 
   const loadThread = useCallback(async () => {
     if (!ticketId || !phone) return;
     try {
-      const res = await fetch(
-        `${API_URL}/api/escalations/${encodeURIComponent(ticketId)}/messages?phone=${encodeURIComponent(phone)}`,
+      const t = await apiFetch<EscalationThreadData>(
+        `/api/escalations/${encodeURIComponent(ticketId)}/messages?phone=${encodeURIComponent(phone)}`,
       );
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data?.error?.message || "Could not load this conversation.");
-        return;
-      }
-      const t: EscalationThreadData = data.data || data;
       setThread(t);
       // Fire onResolved once when the ticket transitions to RESOLVED.
       if (t?.status?.toUpperCase() === "RESOLVED" && !resolvedFiredRef.current) {
         resolvedFiredRef.current = true;
         onResolvedRef.current?.();
       }
-    } catch {
-      setError("Network error. Could not load this conversation.");
+    } catch (err) {
+      setError((err as ApiError)?.message || "Could not load this conversation.");
     } finally {
       setLoading(false);
     }
@@ -154,20 +147,15 @@ export function EscalationThread({ ticketId, phone, customerName, onResolved }: 
     setDraft("");
 
     try {
-      const res = await fetch(
-        `${API_URL}/api/escalations/${encodeURIComponent(ticketId)}/messages`,
+      const data = await apiFetch<{ message?: unknown }>(
+        `/api/escalations/${encodeURIComponent(ticketId)}/messages`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ phone, message, customerName }),
         },
       );
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error?.message || "Could not send your message.");
-      }
       // Replace the optimistic bubble with the canonical one returned by the API.
-      const canonical = data.data?.message || data.message || null;
+      const canonical = (data?.message as never) ?? null;
       setThread((prev) => {
         if (!prev) return prev;
         const nextMsgs = canonical

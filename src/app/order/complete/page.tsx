@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { apiFetch, ApiError } from "@/lib/api";
 import { useRouter } from 'next/navigation';
 import { CheckCircle2, AlertCircle, LogIn } from 'lucide-react';
 import { formatNaira } from '@/components/skyal/data';
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || 'https://skyalxpaberin-admin.vercel.app';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,17 +38,15 @@ export default function OrderCompletePage() {
     // Verify payment with admin API
     (async () => {
       try {
-        const verifyRes = await fetch(`${API_URL}/api/payment/verify`, {
+        const verifyData = await apiFetch<{ verified?: boolean; message?: string }>("/api/payment/verify", {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reference: ref }),
         });
 
-        const verifyData = await verifyRes.json();
-
-        if (!verifyRes.ok || !verifyData?.data?.verified) {
+        if (!verifyData?.verified) {
           if (isMounted) {
-            setError(`Payment verification failed. ${verifyData?.data?.message || verifyData?.error?.message || 'Unknown error'}`);
+            // The backend explains why ("Payment amount does not match order total").
+            setError(`Payment verification failed. ${verifyData?.message || 'The payment could not be confirmed.'}`);
             setLoading(false);
           }
           return;
@@ -57,13 +55,10 @@ export default function OrderCompletePage() {
         // If verified, try to fetch order details
         if (orderNum) {
           try {
-            const orderRes = await fetch(`${API_URL}/api/orders?id=${orderNum}&brand=SKYAL`);
-            if (orderRes.ok) {
-              const orderData = await orderRes.json();
-              if (isMounted) {
-                setOrderDetails(orderData.data || orderData);
-              }
-            }
+            const orderData = await apiFetch<typeof orderDetails>(
+              `/api/orders?id=${orderNum}&brand=SKYAL`,
+            );
+            if (isMounted) setOrderDetails(orderData);
           } catch (e) {
             console.warn('Could not fetch order details', e);
           }
@@ -75,7 +70,7 @@ export default function OrderCompletePage() {
         }
       } catch (e: any) {
         if (isMounted) {
-          setError(`Payment verification error: ${e.message}`);
+          setError(`Payment verification error: ${(e as ApiError)?.message || 'please contact support with your order number'}`);
           setLoading(false);
         }
       }

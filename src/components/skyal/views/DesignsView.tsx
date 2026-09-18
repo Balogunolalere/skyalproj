@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { apiFetch, ApiError } from "@/lib/api";
 import { type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import {
@@ -13,7 +14,6 @@ import {
   ExternalLink,
 } from "lucide-react";
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
 interface SavedDesign {
   id: string;
@@ -104,17 +104,12 @@ export default function DesignsView({
   const load = useCallback(async (p: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/saved-designs?phone=${encodeURIComponent(p)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        setActionError(data?.error?.message || "Could not load saved designs.");
-        setDesigns([]);
-      } else {
-        const payload = data.data || data;
-        setDesigns(payload?.designs || []);
-      }
-    } catch {
-      setActionError("Network error. Please try again.");
+      const payload = await apiFetch<{ designs?: SavedDesign[] }>(
+        `/api/saved-designs?phone=${encodeURIComponent(p)}`,
+      );
+      setDesigns(payload?.designs || []);
+    } catch (err) {
+      setActionError((err as ApiError)?.message || "Could not load saved designs.");
       setDesigns([]);
     } finally {
       setLoading(false);
@@ -130,15 +125,11 @@ export default function DesignsView({
     if (orders.length) return;
     setOrdersLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/magic-link`, {
+      const data = await apiFetch<{ orders?: [] }>("/api/magic-link", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: p }),
       });
-      const data = await res.json();
-      if (res.ok) {
-        setOrders(data.data?.orders || []);
-      }
+      setOrders(data?.orders || []);
     } catch {
       // swallow — the dropdown just stays empty
     } finally {
@@ -173,17 +164,14 @@ export default function DesignsView({
     setSubmitting(true);
     setFormError(null);
     try {
-      const res = await fetch(`${API_URL}/api/saved-designs`, {
+      await apiFetch("/api/saved-designs", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           customerPhone: phone,
           name: orderName.trim(),
           fromOrderNumber: orderPick,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error?.message || "Could not save design.");
       await load(phone);
       closeMode();
     } catch (err) {
@@ -203,9 +191,8 @@ export default function DesignsView({
     setSubmitting(true);
     setFormError(null);
     try {
-      const res = await fetch(`${API_URL}/api/saved-designs`, {
+      await apiFetch("/api/saved-designs", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           customerPhone: phone,
           name: urlName.trim(),
@@ -214,8 +201,6 @@ export default function DesignsView({
           notes: urlNotes.trim() || undefined,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error?.message || "Could not save design.");
       await load(phone);
       closeMode();
     } catch (err) {
@@ -230,18 +215,10 @@ export default function DesignsView({
     setDeleting(true);
     setActionError(null);
     try {
-      const res = await fetch(
-        `${API_URL}/api/saved-designs/${encodeURIComponent(id)}?phone=${encodeURIComponent(phone)}`,
-        {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ customerPhone: phone }),
-        },
-      );
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error?.message || "Could not delete design.");
-      }
+      await apiFetch(`/api/saved-designs/${encodeURIComponent(id)}?phone=${encodeURIComponent(phone)}`, {
+        method: "DELETE",
+        body: JSON.stringify({ customerPhone: phone }),
+      });
       setConfirmDeleteId(null);
       await load(phone);
     } catch (err) {

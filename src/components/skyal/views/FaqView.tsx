@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { Search, Plus, Loader2, AlertCircle } from "lucide-react";
+import { apiFetch, ApiError } from "@/lib/api";
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
 interface FAQItem {
   id: string;
@@ -51,17 +51,12 @@ export default function FaqView({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/api/faq?brand=SKYAL`);
-        const data = await res.json();
+        const data = await apiFetch<{ faqs?: never[] } & Record<string, never[]>>("/api/faq?brand=SKYAL");
         if (cancelled) return;
-        if (!res.ok) {
-          setError(data?.error?.message || "Could not load FAQs.");
-          setFaqs([]);
-        } else {
-          setFaqs(data.data?.faqs || data.faqs || []);
-        }
-      } catch {
-        if (!cancelled) setError("Network error. Please try again.");
+        setFaqs((data as { faqs?: [] }).faqs || (data as never) || []);
+      } catch (err) {
+        if (!cancelled) setError((err as ApiError)?.message || "Could not load FAQs.");
+        if (!cancelled) setFaqs([]);
       } finally {
         if (!cancelled) setLoading(false);
       }

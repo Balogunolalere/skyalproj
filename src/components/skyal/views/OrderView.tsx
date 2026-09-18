@@ -1,5 +1,6 @@
 "use client";
 
+import { apiFetch, ApiError } from "@/lib/api";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
@@ -28,7 +29,6 @@ import {
   getBusinessCalendar,
 } from "@/lib/business-calendar";
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
 /* ── Upload limits (shared by the file picker and the submit path) ── */
 const MAX_FILES = 5;
@@ -277,10 +277,10 @@ export default function OrderView({
     if (!custPhone) return;
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/api/saved-addresses?phone=${encodeURIComponent(custPhone)}`);
-        const data = await res.json();
-        if (res.ok) {
-          const payload = data.data || data;
+        const payload = await apiFetch<{ addresses?: SavedAddress[] }>(
+          `/api/saved-addresses?phone=${encodeURIComponent(custPhone)}`,
+        );
+        {
           const list = payload?.addresses || [];
           setSavedAddresses(list);
           // Auto-fill the delivery address with the default (or most recent) saved
@@ -336,14 +336,12 @@ export default function OrderView({
     
     if (reference) {
       // Verify payment directly from URL param
-      fetch(`${API_URL}/api/payment/verify`, {
+      apiFetch<{ verified?: boolean }>("/api/payment/verify", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reference }),
       })
-      .then(res => res.json())
       .then(data => {
-        if (!cancelled && data?.data?.verified) {
+        if (!cancelled && data?.verified) {
           const displayOrder = orderNum || 'unknown';
           toast('Payment Confirmed!', {
             icon: '✅',
@@ -369,14 +367,12 @@ export default function OrderView({
       const { orderNumber: pn, reference: pref } = JSON.parse(pendingPayment);
       
       // Verify payment with admin API
-      fetch(`${API_URL}/api/payment/verify`, {
+      apiFetch<{ verified?: boolean }>("/api/payment/verify", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reference: pref }),
       })
-      .then(res => res.json())
       .then(data => {
-        if (!cancelled && data?.data?.verified) {
+        if (!cancelled && data?.verified) {
           // Payment successful - clear pending marker and show toast
           sessionStorage.removeItem(paymentKey);
           toast('Payment Confirmed!', {
@@ -411,19 +407,13 @@ export default function OrderView({
     (async () => {
       setServicesLoading(true);
       try {
-        const res = await fetch(`${API_URL}/api/services?brand=SKYAL`);
-        const data = await res.json();
+        const data = await apiFetch<Service[]>(`/api/services?brand=SKYAL`);
         if (cancelled) return;
-        if (!res.ok) {
-          setServicesError(data?.error?.message || "Failed to load services");
-          setServices([]);
-        } else {
-          setServices(Array.isArray(data?.data) ? data.data : []);
-          setServicesError(null);
-        }
-      } catch {
+        setServices(Array.isArray(data) ? data : []);
+        setServicesError(null);
+      } catch (err) {
         if (!cancelled) {
-          setServicesError("Network error. Please try again.");
+          setServicesError((err as ApiError)?.message || "Could not load services.");
           setServices([]);
         }
       } finally {
@@ -466,9 +456,8 @@ export default function OrderView({
             if (parsed?.phone) custPhone = parsed.phone;
           }
         } catch { /* ignore storage errors */ }
-        const res = await fetch(`${API_URL}/api/services/quote`, {
+        const data = await apiFetch<Record<string, unknown>>(`/api/services/quote`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             buildQuotePayload({
               serviceType,
@@ -490,18 +479,16 @@ export default function OrderView({
             }),
           ),
         });
-        const data = await res.json();
         if (cancelled) return;
-        if (res.ok) {
-          setQuote(data.data || data);
-          setQuoteError(null);
-        } else {
+        setQuote(data as never);
+        setQuoteError(null);
+      } catch (err) {
+        if (!cancelled) {
           setQuote(null);
-          const errMsg = data?.error?.message;
-          if (errMsg) setQuoteError(errMsg);
+          // The engine's message is the useful part ("Pickup must be a working
+          // day", "Delivery address could not be verified") — show it.
+          setQuoteError((err as ApiError)?.message || null);
         }
-      } catch {
-        if (!cancelled) setQuote(null);
       } finally {
         if (!cancelled) setQuoteLoading(false);
       }
@@ -583,21 +570,16 @@ export default function OrderView({
           continue;
         }
         try {
-          const uploadRes = await fetch(`${API_URL}/api/upload`, {
+          const uploadData = await apiFetch<{ url?: string; publicId?: string }>('/api/upload', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ file: file.data, folder: 'skyal-designs' }),
           });
-          const contentType = uploadRes.headers.get('content-type') || '';
-          if (uploadRes.ok && contentType.includes('application/json')) {
-            const uploadData = await uploadRes.json();
-            if (uploadData.data?.url) {
-              uploadedFiles.push({
-                url: uploadData.data.url,
-                publicId: uploadData.data.publicId || '',
-                name: file.name,
-              });
-            }
+          if (uploadData?.url) {
+            uploadedFiles.push({
+              url: uploadData.url,
+              publicId: uploadData.publicId || '',
+              name: file.name,
+            });
           }
         } catch {
           // Individual file upload failure is non-blocking
@@ -652,18 +634,10 @@ export default function OrderView({
             }),
       });
 
-      const res = await fetch(`${API_URL}/api/orders`, {
+      const order = await apiFetch<CreatedOrder>(`/api/orders`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setSubmitError(data?.error?.message || "Failed to create order. Please try again.");
-        setSubmitting(false);
-        return;
-      }
-      const order = (data.data || data) as CreatedOrder;
       const orderNumber = order.orderNumber || "";
 
       // Step 2: Success screen. Provisional QUOTING orders (unpriced custom
@@ -697,27 +671,22 @@ export default function OrderView({
         }
       })();
 
-      const paystackRes = await fetch(`${API_URL}/api/payment/initialize`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: order.totalAmount, // Send in Naira, not kobo
-          email: (email.trim() || order.customerEmail || `order${order.orderNumber}@skyal.ng`),
-          orderNumber: order.orderNumber,
-          brand: "SKYAL",
-          metadata: { orderNumber: order.orderNumber, brand: "SKYAL" },
-          callbackUrl: `${appOrigin}/order/complete?order=${order.orderNumber}`,
-        }),
-      });
-
-      if (!paystackRes.ok) {
-        const errData = await paystackRes.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || 'Failed to initialize payment');
-      }
-
-      const paystackData = await paystackRes.json();
-      const authUrl = paystackData.data?.authorization_url || paystackData.data?.authorizationUrl;
-      const reference = paystackData.data?.reference || paystackData.data?.ref;
+      const paystackData = await apiFetch<{ authorization_url?: string; authorizationUrl?: string; reference?: string; ref?: string }>(
+        `/api/payment/initialize`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            amount: order.totalAmount, // Send in Naira, not kobo
+            email: (email.trim() || order.customerEmail || `order${order.orderNumber}@skyal.ng`),
+            orderNumber: order.orderNumber,
+            brand: "SKYAL",
+            metadata: { orderNumber: order.orderNumber, brand: "SKYAL" },
+            callbackUrl: `${appOrigin}/order/complete?order=${order.orderNumber}`,
+          }),
+        },
+      );
+      const authUrl = paystackData?.authorization_url || paystackData?.authorizationUrl;
+      const reference = paystackData?.reference || paystackData?.ref;
 
       if (!authUrl) {
         throw new Error('Paystack authorization URL missing');

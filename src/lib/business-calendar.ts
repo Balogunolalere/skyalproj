@@ -20,6 +20,8 @@
  * The fetch is best-effort: on any failure (network, not deployed yet, bad
  * JSON) the DEFAULT_BUSINESS_CALENDAR is used so checkout never breaks.
  */
+import { apiFetch } from '@/lib/api';
+
 
 export interface BusinessCalendar {
   /** Minute-of-day the shop opens (480 = 08:00). */
@@ -40,7 +42,6 @@ export const DEFAULT_BUSINESS_CALENDAR: BusinessCalendar = {
   holidays: new Set<string>(),
 };
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || 'https://skyalxpaberin-admin.vercel.app';
 
 /** 480 → '08:00' */
 export function fmtClock(minuteOfDay: number): string {
@@ -119,10 +120,8 @@ export function getBusinessCalendar(): Promise<BusinessCalendar> {
   if (inflight) return inflight;
   inflight = (async () => {
     try {
-      const res = await fetch(`${API_URL}/api/settings?brand=SKYAL`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`settings ${res.status}`);
-      const json = (await res.json()) as { data?: Record<string, string> };
-      cached = parseBusinessCalendar(json.data ?? undefined);
+      const json = await apiFetch<Record<string, string>>('/api/settings?brand=SKYAL');
+      cached = parseBusinessCalendar(json ?? undefined);
     } catch {
       cached = DEFAULT_BUSINESS_CALENDAR;
     } finally {

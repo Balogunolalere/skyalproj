@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { apiFetch, ApiError } from "@/lib/api";
 import { type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import {
@@ -14,7 +15,6 @@ import {
   MapPin,
 } from "lucide-react";
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
 interface SavedAddress {
   id: string;
@@ -122,17 +122,12 @@ export default function AddressesView({
   const load = useCallback(async (p: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/saved-addresses?phone=${encodeURIComponent(p)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        setActionError(data?.error?.message || "Could not load addresses.");
-        setAddresses([]);
-      } else {
-        const payload = data.data || data;
-        setAddresses(payload?.addresses || []);
-      }
-    } catch {
-      setActionError("Network error. Please try again.");
+      const payload = await apiFetch<{ addresses?: SavedAddress[] }>(
+        `/api/saved-addresses?phone=${encodeURIComponent(p)}`,
+      );
+      setAddresses(payload?.addresses || []);
+    } catch (err) {
+      setActionError((err as ApiError)?.message || "Could not load addresses.");
       setAddresses([]);
     } finally {
       setLoading(false);
@@ -195,25 +190,16 @@ export default function AddressesView({
       };
       if (editingId) {
         // Update existing address.
-        const updateRes = await fetch(
-          `${API_URL}/api/saved-addresses/${encodeURIComponent(editingId)}?phone=${encodeURIComponent(phone)}`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...payload, customerPhone: phone }),
-          },
-        );
-        const updateData = await updateRes.json();
-        if (!updateRes.ok) throw new Error(updateData?.error?.message || "Could not update address.");
+        await apiFetch(`/api/saved-addresses/${encodeURIComponent(editingId)}?phone=${encodeURIComponent(phone)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ ...payload, customerPhone: phone }),
+        });
       } else {
         // Create new address.
-        const res = await fetch(`${API_URL}/api/saved-addresses`, {
+        await apiFetch("/api/saved-addresses", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data?.error?.message || "Could not save address.");
       }
       await load(phone);
       closeForm();
@@ -228,18 +214,10 @@ export default function AddressesView({
     if (!phone) return;
     setActionError(null);
     try {
-      const res = await fetch(
-        `${API_URL}/api/saved-addresses/${encodeURIComponent(a.id)}?phone=${encodeURIComponent(phone)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ customerPhone: phone, isDefault: true }),
-        },
-      );
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error?.message || "Could not set default address.");
-      }
+      await apiFetch(`/api/saved-addresses/${encodeURIComponent(a.id)}?phone=${encodeURIComponent(phone)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ customerPhone: phone, isDefault: true }),
+      });
       await load(phone);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Could not set default address.");
@@ -251,18 +229,10 @@ export default function AddressesView({
     setDeleting(true);
     setActionError(null);
     try {
-      const res = await fetch(
-        `${API_URL}/api/saved-addresses/${encodeURIComponent(id)}?phone=${encodeURIComponent(phone)}`,
-        {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ customerPhone: phone }),
-        },
-      );
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error?.message || "Could not delete address.");
-      }
+      await apiFetch(`/api/saved-addresses/${encodeURIComponent(id)}?phone=${encodeURIComponent(phone)}`, {
+        method: "DELETE",
+        body: JSON.stringify({ customerPhone: phone }),
+      });
       setConfirmDeleteId(null);
       await load(phone);
     } catch (err) {

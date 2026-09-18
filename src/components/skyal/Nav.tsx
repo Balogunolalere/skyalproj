@@ -4,8 +4,8 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { Logo } from "./Logo";
 import { NAV_ITEMS, type ViewId } from "./data";
 import { Menu, X, Bell } from "lucide-react";
+import { apiFetch } from "@/lib/api";
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
 interface CustomerNotification {
   id: string;
@@ -81,12 +81,9 @@ function NotificationBell({ onNavigate }: { onNavigate: (v: ViewId) => void }) {
 
   const fetchNotifications = useCallback(async (p: string) => {
     try {
-      const res = await fetch(
-        `${API_URL}/api/customer/notifications?phone=${encodeURIComponent(p)}`,
+      const payload = await apiFetch<{ notifications?: []; unreadCount?: number }>(
+        `/api/customer/notifications?phone=${encodeURIComponent(p)}`,
       );
-      const data = await res.json();
-      if (!res.ok) return;
-      const payload = data.data || data;
       setNotifications(payload?.notifications || []);
       setUnreadCount(payload?.unreadCount || 0);
     } catch {
@@ -112,9 +109,8 @@ function NotificationBell({ onNavigate }: { onNavigate: (v: ViewId) => void }) {
       if (next && phone && unreadCount > 0) {
         // Optimistically clear the badge; mark-all-read on the server.
         setUnreadCount(0);
-        fetch(`${API_URL}/api/customer/notifications?phone=${encodeURIComponent(phone)}`, {
+        apiFetch(`/api/customer/notifications?phone=${encodeURIComponent(phone)}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ markAllRead: true }),
         }).catch(() => {
           // On failure, re-fetch to restore the true unread count.

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { apiFetch, ApiError } from "@/lib/api";
 import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { EscalationThread } from "../EscalationThread";
@@ -70,7 +71,6 @@ function prettyAddress(raw: string | null | undefined): string {
   return trimmed;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
 interface Order {
   orderNumber: string;
@@ -242,20 +242,16 @@ export default function DashboardView({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/api/magic-link`, {
+      const data = await apiFetch<{ orders?: [] }>("/api/magic-link", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: phoneVal, brand: "SKYAL" }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data?.error?.message || "Failed to load orders");
-        setOrders([]);
-      } else {
-        setOrders(data.data?.orders || []);
-      }
-    } catch {
-      setError("Network error. Please try again.");
+      setOrders(data?.orders || []);
+    } catch (err) {
+      const e = err as ApiError;
+      // Only a 404 means "this phone has no orders" — a rate limit or a server
+      // fault must say so instead of blaming the customer's number.
+      setError(e?.isNotFound ? "No orders found for this phone number." : e?.message || "Could not load your orders.");
       setOrders([]);
     } finally {
       setLoading(false);
@@ -265,17 +261,12 @@ export default function DashboardView({
   const fetchEscalations = async (phoneVal: string) => {
     setEscalationsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/escalations?phone=${encodeURIComponent(phoneVal)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        // The escalations endpoint may not be live yet — silently show empty.
-        setEscalations([]);
-      } else {
-        // API returns { data: { escalations: [...] } } — handle both
-        // the nested shape and a plain array fallback.
-        const list = data.data?.escalations || data.escalations || (Array.isArray(data.data) ? data.data : data);
-        setEscalations(Array.isArray(list) ? list : []);
-      }
+      // Best-effort: an unavailable endpoint shows an empty list, not an error.
+      const data = await apiFetch<{ escalations?: unknown[] } | unknown[]>(
+        `/api/escalations?phone=${encodeURIComponent(phoneVal)}`,
+      );
+      const list = Array.isArray(data) ? data : (data as { escalations?: unknown[] })?.escalations;
+      setEscalations(Array.isArray(list) ? (list as never[]) : []);
     } catch {
       setEscalations([]);
     } finally {
@@ -288,17 +279,12 @@ export default function DashboardView({
     setDetailError(null);
     setDetailData(null);
     try {
-      const res = await fetch(`${API_URL}/api/orders?id=${encodeURIComponent(orderNumber)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        setDetailError(data?.error?.message || "Failed to load order details");
-        return null;
-      }
-      const detail: OrderDetail = data.data || data;
+      const detail = await apiFetch<OrderDetail>(`/api/orders?id=${encodeURIComponent(orderNumber)}`);
       setDetailData(detail);
       return detail;
-    } catch {
-      setDetailError("Network error. Please try again.");
+    } catch (err) {
+      const e = err as ApiError;
+      setDetailError(e?.isNotFound ? "Order not found" : e?.message || "Could not load order details");
       return null;
     } finally {
       setDetailLoading(false);
@@ -312,13 +298,10 @@ export default function DashboardView({
   const loadQuotes = useCallback(async () => {
     if (!phone) return;
     try {
-      const res = await fetch(`${API_URL}/api/quotes?phone=${encodeURIComponent(phone)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        setOpenQuotes([]);
-        return;
-      }
-      const list = Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : [];
+      const data = await apiFetch<SavedQuote[] | { quotes?: SavedQuote[] }>(
+        `/api/quotes?phone=${encodeURIComponent(phone)}`,
+      );
+      const list = Array.isArray(data) ? data : data?.quotes || [];
       setOpenQuotes(list);
       setQuotesError(null);
     } catch {
@@ -350,23 +333,21 @@ export default function DashboardView({
         return base;
       }
     })();
-    const res = await fetch(`${API_URL}/api/payment/initialize`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        amount: order.totalAmount,
-        email,
-        orderNumber: order.orderNumber,
-        brand: "SKYAL",
-        metadata: { orderNumber: order.orderNumber, brand: "SKYAL" },
-        callbackUrl: `${appOrigin}/order/complete?order=${order.orderNumber}`,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data?.error?.message || "Payment could not be initialized.");
-    }
-    const authUrl = data.data?.authorization_url || data.data?.authorizationUrl;
+    const data = await apiFetch<{ authorization_url?: string; authorizationUrl?: string }>(
+      "/api/payment/initialize",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          amount: order.totalAmount,
+          email,
+          orderNumber: order.orderNumber,
+          brand: "SKYAL",
+          metadata: { orderNumber: order.orderNumber, brand: "SKYAL" },
+          callbackUrl: `${appOrigin}/order/complete?order=${order.orderNumber}`,
+        }),
+      },
+    );
+    const authUrl = data?.authorization_url || data?.authorizationUrl;
     if (!authUrl) {
       throw new Error("Payment could not be started — no checkout link returned.");
     }
@@ -378,16 +359,10 @@ export default function DashboardView({
     if (!phone) return;
     setQuotesError(null);
     try {
-      const res = await fetch(`${API_URL}/api/quotes/${encodeURIComponent(q.id)}/accept`, {
+      const order = await apiFetch<Order>(`/api/quotes/${encodeURIComponent(q.id)}/accept`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ customerPhone: phone }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error?.message || "Could not accept the quote. Please try again.");
-      }
-      const order = (data.data || data) as Order;
       await payOrder(order);
     } catch (err) {
       setQuotesError(err instanceof Error ? err.message : "Could not accept the quote. Please try again.");
@@ -398,10 +373,9 @@ export default function DashboardView({
   /* ── Email-me-updates preferences ── */
   const loadEmailPreferences = useCallback(async (phoneVal: string) => {
     try {
-      const res = await fetch(`${API_URL}/api/customer/preferences?phone=${encodeURIComponent(phoneVal)}`);
-      const data = await res.json();
-      if (!res.ok) return;
-      const prefs = data.data || data;
+      const prefs = await apiFetch<{ emailNotifications?: boolean; customerEmail?: string | null }>(
+        `/api/customer/preferences?phone=${encodeURIComponent(phoneVal)}`,
+      );
       setEmailNotifications(!!prefs?.emailNotifications);
       setPrefEmail(prefs?.customerEmail || null);
     } catch {
@@ -417,9 +391,8 @@ export default function DashboardView({
       setEmailPrefError(null);
       setEmailPrefSaving(true);
       try {
-        const res = await fetch(`${API_URL}/api/customer/preferences`, {
+        await apiFetch("/api/customer/preferences", {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             customerPhone: phone,
             emailNotifications: next,
@@ -427,10 +400,6 @@ export default function DashboardView({
             customerName: name || undefined,
           }),
         });
-        if (!res.ok) {
-          const data = await res.json().catch(() => null);
-          throw new Error(data?.error?.message || "Could not update preferences.");
-        }
         setEmailPrefSaved(true);
         setTimeout(() => setEmailPrefSaved(false), 1500);
       } catch (err) {
@@ -454,9 +423,8 @@ export default function DashboardView({
     setEscalateSubmitting(true);
     setEscalateError(null);
     try {
-      const res = await fetch(`${API_URL}/api/escalations`, {
+      const data = await apiFetch<{ ticketId?: string; id?: string }>("/api/escalations", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           orderNumber: detailOrder.orderNumber,
           customerPhone: phone,
@@ -465,13 +433,7 @@ export default function DashboardView({
           message,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setEscalateError(data?.error?.message || "Failed to submit escalation. Please try again.");
-        setEscalateSubmitting(false);
-        return;
-      }
-      const ticket = data.data?.ticketId || data.data?.id || data.ticketId || data.id || "";
+      const ticket = data?.ticketId || data?.id || "";
       toast({
         title: "Escalation submitted",
         description: `Ticket ${ticket} — our team will review and respond shortly.`,
@@ -553,21 +515,18 @@ export default function DashboardView({
     setModifyError(null);
     setModifySuccess(null);
     try {
-      const res = await fetch(`${API_URL}/api/orders/${encodeURIComponent(detailOrder.orderNumber)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "modify",
-          customerPhone: phone,
-          quantity: modifyQty,
-          deliveryAddress: modifyAddress.trim() || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error?.message || "Could not modify the order. Please try again.");
-      }
-      const result = data.data || data;
+      const result = await apiFetch<{ totalAmount?: number }>(
+        `/api/orders/${encodeURIComponent(detailOrder.orderNumber)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            action: "modify",
+            customerPhone: phone,
+            quantity: modifyQty,
+            deliveryAddress: modifyAddress.trim() || undefined,
+          }),
+        },
+      );
       const newTotal = result?.totalAmount;
       setModifySuccess(
         typeof newTotal === "number"
@@ -576,14 +535,12 @@ export default function DashboardView({
       );
       // Refresh the order detail + orders list so the displayed total stays in sync.
       try {
-        const freshRes = await fetch(`${API_URL}/api/orders?id=${encodeURIComponent(detailOrder.orderNumber)}`);
-        const freshData = await freshRes.json();
-        if (freshRes.ok) {
-          const fresh = freshData.data || freshData;
-          setDetailData(fresh);
-          setModifyQty(fresh?.quantity ?? modifyQty);
-          setModifyAddress(prettyAddress(fresh?.deliveryAddress));
-        }
+        const fresh = await apiFetch<{ quantity?: number; deliveryAddress?: string | null }>(
+          `/api/orders?id=${encodeURIComponent(detailOrder.orderNumber)}`,
+        );
+        setDetailData(fresh as never);
+        setModifyQty(fresh?.quantity ?? modifyQty);
+        setModifyAddress(prettyAddress(fresh?.deliveryAddress));
       } catch {
         // non-fatal — the success banner already shows the new total.
       }
@@ -601,19 +558,14 @@ export default function DashboardView({
     setCancelSubmitting(true);
     setCancelError(null);
     try {
-      const res = await fetch(`${API_URL}/api/orders/${encodeURIComponent(detailOrder.orderNumber)}`, {
+      await apiFetch(`/api/orders/${encodeURIComponent(detailOrder.orderNumber)}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "cancel",
           customerPhone: phone,
           reason: cancelReason.trim() || undefined,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error?.message || "Could not cancel the order. Please try again.");
-      }
       toast({
         title: "Order cancelled",
         description: `${detailOrder.orderNumber} has been cancelled.`,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { apiFetch, ApiError } from "@/lib/api";
 import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { ArrowRight, Loader2, AlertCircle } from "lucide-react";
@@ -19,7 +20,6 @@ import {
   getBusinessCalendar,
 } from "@/lib/business-calendar";
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
 
 interface Service {
   id: string;
@@ -121,20 +121,14 @@ export default function CalculatorView({
     (async () => {
       setServicesLoading(true);
       try {
-        const res = await fetch(`${API_URL}/api/services?brand=SKYAL`);
-        const data = await res.json();
+        const data = await apiFetch<Service[]>(`/api/services?brand=SKYAL`);
         if (cancelled) return;
-        if (!res.ok) {
-          setServicesError(data?.error?.message || "Failed to load services");
-          setServices([]);
-        } else {
-          const list = Array.isArray(data?.data) ? data.data : [];
-          setServices(list);
-          if (list.length) setServiceType(list[0].type);
-        }
-      } catch {
+        const list = Array.isArray(data) ? data : [];
+        setServices(list);
+        if (list.length) setServiceType(list[0].type);
+      } catch (err) {
         if (!cancelled) {
-          setServicesError("Network error. Please try again.");
+          setServicesError((err as ApiError)?.message || "Could not load services.");
           setServices([]);
         }
       } finally {
@@ -181,9 +175,8 @@ export default function CalculatorView({
     setQuoteError(null);
     setSearched(true);
     try {
-      const res = await fetch(`${API_URL}/api/services/quote`, {
+      const data = await apiFetch<QuoteResponse>(`/api/services/quote`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
           buildQuotePayload({
             serviceType,
@@ -197,11 +190,7 @@ export default function CalculatorView({
           }),
         ),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error?.message || "Could not calculate a quote. Try again.");
-      }
-      const result: QuoteResponse = data.data || data;
+      const result = data;
       setBreakdown(result.breakdown || null);
       setTotal(result.breakdown?.finalPriceNaira ?? result.quoteNaira ?? 0);
     } catch (err) {
