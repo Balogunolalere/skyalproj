@@ -380,7 +380,9 @@ export function buildQuotePayload(args: QuotePayloadArgs): Record<string, unknow
   if (args.deliveryMethod) payload.deliveryMethod = args.deliveryMethod;
   if (args.deliveryAddress) payload.deliveryAddress = args.deliveryAddress;
   if (args.referralCode) payload.referralCode = args.referralCode;
-  if (args.customerPhone) payload.customerPhone = args.customerPhone;
+  // Digits only: the client accepts separators (including a leading paren, which
+  // the backend's regex rejects), so send the normalised form.
+  if (args.customerPhone) payload.customerPhone = stripPhoneFormatting(args.customerPhone);
   if (args.selectedOptions && Object.keys(args.selectedOptions).length > 0) {
     payload.selectedOptions = args.selectedOptions;
   } else if (args.selectedVariant) {
@@ -418,7 +420,8 @@ export function buildOrderPayload(args: OrderPayloadArgs): Record<string, unknow
     quantity: args.quantity,
     sla: args.sla,
     customerName: args.customerName,
-    customerPhone: args.customerPhone,
+    // Digits only — see buildQuotePayload.
+    customerPhone: stripPhoneFormatting(args.customerPhone),
     customerEmail: args.customerEmail,
     requestedPickupTime: args.requestedPickupTime,
   };

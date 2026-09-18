@@ -102,6 +102,22 @@ export function AddressPicker({ token, value, onChange }: AddressPickerProps) {
   const [searching, setSearching] = useState(false);
   const [showSug, setShowSug] = useState(false);
 
+  /* ── Reverse geocode a clicked/dropped point → validated address ── */
+  const reverseGeocode = async (lat: number, lng: number) => {
+    if (!token) return;
+    try {
+      const res = await fetch(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json` +
+          `?access_token=${encodeURIComponent(token)}&country=ng&limit=1`,
+      );
+      const json = await res.json();
+      const f = json?.features?.[0];
+      if (f?.place_name) onChange(f.place_name);
+    } catch {
+      // Keep the current value on network failure.
+    }
+  };
+
   /* ── Map init (CDN, once per token) ── */
   useEffect(() => {
     if (!containerRef.current || !token) return;
@@ -145,24 +161,7 @@ export function AddressPicker({ token, value, onChange }: AddressPickerProps) {
       mapRef.current = null;
       markerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
-
-  /* ── Reverse geocode a clicked/dropped point → validated address ── */
-  const reverseGeocode = async (lat: number, lng: number) => {
-    if (!token) return;
-    try {
-      const res = await fetch(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json` +
-          `?access_token=${encodeURIComponent(token)}&country=ng&limit=1`,
-      );
-      const json = await res.json();
-      const f = json?.features?.[0];
-      if (f?.place_name) onChange(f.place_name);
-    } catch {
-      // Keep the current value on network failure.
-    }
-  };
 
   /* ── Forward geocode the typed query (debounced) ── */
   useEffect(() => {
@@ -197,7 +196,6 @@ export function AddressPicker({ token, value, onChange }: AddressPickerProps) {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, token]);
 
   /* ── Pick a suggestion → validated address + move the marker ── */

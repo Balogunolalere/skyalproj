@@ -7,7 +7,7 @@ import { Search, Package, Scissors, Truck, CheckCircle2, CreditCard, ClipboardLi
 
 const STEP_ICONS = [CreditCard, ClipboardList, Scissors, CheckCircle2, Truck, Package];
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
+import { apiFetch, ApiError } from "@/lib/api";
 
 interface OrderData {
   orderNumber: string;
@@ -45,17 +45,14 @@ export default function TrackView({
     setOrder(null);
     setSearched(v);
     try {
-      const res = await fetch(`${API_URL}/api/orders?id=${encodeURIComponent(v)}&brand=SKYAL`);
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data?.error?.message || "Order not found");
-        setOrder(null);
-      } else {
-        setOrder(data.data || data);
-        setError(null);
-      }
-    } catch {
-      setError("Network error. Please try again.");
+      const data = await apiFetch(`/api/orders?id=${encodeURIComponent(v)}&brand=SKYAL`);
+      setOrder(data as never);
+      setError(null);
+    } catch (err) {
+      // A 404 means the order number is wrong; anything else (rate limit,
+      // server fault, network) must say what it is instead of "Order not found".
+      const e = err as ApiError;
+      setError(e?.isNotFound ? "Order not found" : e?.message || "Could not look that up. Please try again.");
       setOrder(null);
     } finally {
       setLoading(false);

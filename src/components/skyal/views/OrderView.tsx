@@ -179,7 +179,13 @@ export default function OrderView({
   // Live mirror of `address` for effects that run once on mount (so an async
   // saved-address fetch never overwrites an address set by another effect).
   const addressRef = useRef(address);
-  addressRef.current = address;
+  // Sync in an effect, not during render: writing a ref while rendering is a
+  // React-compiler violation (a concurrent render can be thrown away, leaving
+  // the ref holding a value that never committed). Declared here so it runs
+  // before the effects below that read it.
+  useEffect(() => {
+    addressRef.current = address;
+  }, [address]);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [referral, setReferral] = useState("");
   const [name, setName] = useState("");

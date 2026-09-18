@@ -7,7 +7,7 @@ import { Loader2 } from "lucide-react";
 
 type Mode = "login" | "register";
 
-const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app";
+import { apiFetch, ApiError } from "@/lib/api";
 
 export default function LoginView({
   onNavigate,
@@ -34,19 +34,12 @@ export default function LoginView({
       try {
         // Call admin API to verify phone and get orders — brand filter so a
         // SKYAL customer never sees PABERIN orders.
-        const res = await fetch(`${API_URL}/api/magic-link`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: phone.trim(), brand: "SKYAL" }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          setError(data?.error?.message || "No orders found for this phone number.");
-          setLoading(false);
-          return;
-        }
+        const data = await apiFetch<{ orders?: { customerName?: string; customerEmail?: string }[] }>(
+          "/api/magic-link",
+          { method: "POST", body: JSON.stringify({ phone: phone.trim(), brand: "SKYAL" }) },
+        );
         // Get customer name from the most recent order
-        const orders = data.data?.orders || [];
+        const orders = data?.orders || [];
         if (orders.length === 0) {
           setError("No orders found for this phone number.");
           setLoading(false);
@@ -60,8 +53,16 @@ export default function LoginView({
         );
         setLoading(false);
         onNavigate("dashboard");
-      } catch {
-        setError("Network error. Please try again.");
+      } catch (err) {
+        // "No orders found" is only true for a 404. A rate limit or a server
+        // fault used to fall back to that sentence too, which told a customer
+        // with real orders that they do not exist.
+        const e = err as ApiError;
+        setError(
+          e?.isNotFound
+            ? "No orders found for this phone number."
+            : e?.message || "Could not sign you in. Please try again.",
+        );
         setLoading(false);
       }
     } else {
