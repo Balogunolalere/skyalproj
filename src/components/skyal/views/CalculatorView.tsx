@@ -21,6 +21,7 @@ import {
   fmtClock,
   getBusinessCalendar,
 } from "@/lib/business-calendar";
+import { usePreviewFonts } from "@/lib/preview-fonts";
 
 
 interface Service {
@@ -149,6 +150,9 @@ export default function CalculatorView({
     () => services.find((s) => s.type === serviceType) || null,
     [services, serviceType],
   );
+
+  // Preview stylesheet only when this service actually offers fonts.
+  usePreviewFonts((selectedService?.optionFields ?? []).some((f) => f.type === "font"));
 
   // If the currently-selected service doesn't allow Express, force Standard.
   useEffect(() => {

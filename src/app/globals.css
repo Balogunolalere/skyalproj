@@ -315,3 +315,61 @@
     * { scroll-behavior: auto !important; }
   }
 }
+
+/* ---------------------------------------------------------------- print fonts
+   The real typefaces for the customer font picker. Each stack in
+   src/lib/print-fonts.ts lists the real family FIRST and a free fallback after
+   it, so uncommenting one of these switches that font from "approximate" to
+   exact. See public/fonts/README.md for the filenames and the licensing note.
+
+@font-face {
+  font-family: "Samantha Upright PRO W05";
+  src: url("/fonts/SamanthaUprightPROW05.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Style Script";
+  src: url("/fonts/StyleScript.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Lavanderia Sturdy";
+  src: url("/fonts/LavanderiaSturdy.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Athena of the Ocean";
+  src: url("/fonts/AthenaOfTheOcean.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Amarillo";
+  src: url("/fonts/Amarillo.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Sunshine";
+  src: url("/fonts/Sunshine.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "White Dream";
+  src: url("/fonts/WhiteDream.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Gabriola";
+  src: url("/fonts/Gabriola.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Clarendon";
+  src: url("/fonts/Clarendon.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Baby Valentina";
+  src: url("/fonts/BabyValentina.woff2") format("woff2");
+  font-display: swap;
+}
+------------------------------------------------------------------------------- */

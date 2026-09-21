@@ -30,6 +30,7 @@ import {
   DEFAULT_BUSINESS_CALENDAR,
   getBusinessCalendar,
 } from "@/lib/business-calendar";
+import { usePreviewFonts } from "@/lib/preview-fonts";
 
 
 /* ── Upload limits (shared by the file picker and the submit path) ── */
@@ -533,6 +534,9 @@ export default function OrderView({
   // Full contract (required + bounds + length + still-a-listed-choice), so the
   // step cannot advance into a payload the backend will reject.
   const optionValidation = validateOptionValues(service?.optionFields, selectedOptions);
+
+  // Preview stylesheet only when this service actually offers fonts.
+  usePreviewFonts((service?.optionFields ?? []).some((f) => f.type === "font"));
   const pickupValid = !!requestedPickupTime && isValidPickupISO(requestedPickupTime, Date.now(), cal);
   const phoneValid = isValidNigerianPhone(phone);
 

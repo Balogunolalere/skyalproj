@@ -1,6 +1,7 @@
 "use client";
 
 import { normalizeChoices, type OptionField, type ServiceOptionShape } from "@/lib/order";
+import { PRINT_FONTS, fontStack, previewTextFor } from "@/lib/print-fonts";
 
 /**
  * Renders the service's option inputs exactly like the admin contract:
@@ -36,6 +37,9 @@ export function OptionFieldsBlock({
 }) {
   const fields = Array.isArray(service.optionFields) ? service.optionFields : [];
   if (fields.length > 0) {
+    // What a font preview should render: the text the customer has typed into
+    // this service's message field, or a sample until they type.
+    const previewText = previewTextFor(fields, values);
     return (
       <div className="space-y-5">
         {fields.map((field) => (
@@ -45,6 +49,7 @@ export function OptionFieldsBlock({
             value={values[field.key] ?? ""}
             onChange={(v) => onChange({ ...values, [field.key]: v })}
             error={errors?.[field.key]}
+            previewText={previewText}
           />
         ))}
       </div>
@@ -83,11 +88,14 @@ function OptionFieldInput({
   value,
   onChange,
   error,
+  previewText,
 }: {
   field: OptionField;
   value: string;
   onChange: (v: string) => void;
   error?: string;
+  /** Text the font preview renders (the customer's message, or a sample). */
+  previewText?: string;
 }) {
   const errorLine = error ? (
     <p role="alert" className="text-xs text-oxblood mt-1.5">
@@ -114,6 +122,58 @@ function OptionFieldInput({
   );
 
   switch (field.type) {
+    case "font": {
+      const choices = normalizeChoices(field.choices);
+      const selected = choices.some((c) => c.value === value) ? value : "";
+      const shown = previewText ?? "Happy Birthday";
+      const styles = choices.length > 0 ? choices : PRINT_FONTS.map((f) => ({ value: f.name, image: undefined }));
+      return (
+        <div>
+          <span className={labelClass}>{labelContent}</span>
+          {/* Every name is rendered IN ITS OWN FONT: that is the comparison the
+              customer is here to make. */}
+          <div role="radiogroup" aria-label={field.label} className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {styles.map((choice) => {
+              const isSelected = selected === choice.value;
+              return (
+                <button
+                  key={choice.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={isSelected}
+                  data-choice-value={choice.value}
+                  onClick={() => onChange(choice.value)}
+                  style={{ fontFamily: fontStack(choice.value) }}
+                  className={`px-3 py-3 border text-lg leading-tight transition-colors ${
+                    isSelected ? "border-laser bg-vellum text-ink" : "border-hairline bg-bone text-ink/80 hover:border-ink/40"
+                  }`}
+                >
+                  {choice.value}
+                </button>
+              );
+            })}
+          </div>
+          {selected && (
+            <div className="mt-3 border border-hairline bg-vellum px-4 py-5">
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
+                Your text in {selected}
+              </p>
+              <p
+                data-testid="font-preview"
+                style={{ fontFamily: fontStack(selected) }}
+                className="mt-2 text-ink text-3xl sm:text-4xl leading-tight break-words"
+              >
+                {shown}
+              </p>
+              <p className="mt-2 text-xs text-thread/70">
+                A guide, not a proof — your operator sets the final size and spacing.
+              </p>
+            </div>
+          )}
+          {errorLine}
+        </div>
+      );
+    }
     case "dropdown": {
       const choices = normalizeChoices(field.choices);
       const hasImages = choices.some((c) => !!c.image);

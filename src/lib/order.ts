@@ -44,7 +44,7 @@ export interface OptionChoice {
 export interface OptionField {
   key: string;
   label: string;
-  type: 'dropdown' | 'text' | 'textarea' | 'number';
+  type: 'dropdown' | 'font' | 'text' | 'textarea' | 'number';
   choices?: (string | OptionChoice)[];
   required?: boolean;
   min?: number;
@@ -130,12 +130,17 @@ export function validateOptionValues(
       errors[field.key] = `${field.label} must be at most ${field.maxLength} characters`;
       continue;
     }
-    if (field.type === "dropdown") {
+    if (field.type === "dropdown" || field.type === "font") {
       // No choices configured means NOTHING can be valid: the backend looks the
       // value up in the list (`choices?.find` → undefined → invalid choice).
+      // A font field always arrives with its choices (the backend attaches the
+      // house list), so it validates through this same path.
       const choices = normalizeChoices(field.choices);
       if (!choices.some((c) => c.value === text)) {
-        errors[field.key] = `${field.label} must be one of the listed options`;
+        errors[field.key] =
+          field.type === "font"
+            ? `${field.label} must be one of the listed fonts`
+            : `${field.label} must be one of the listed options`;
       }
     }
   }
