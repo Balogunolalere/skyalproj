@@ -116,7 +116,7 @@ describe('formatServiceLine — field boundaries', () => {
         optionFields: [
           { key: 'fonts', label: 'Font', type: 'font', choices: [{ value: 'Great Vibes' }, { value: 'Clarendon' }], required: true },
         ],
-      } as Partial<CatalogService>),
+      }),
     );
     expect(line).toContain('fonts=Great Vibes|Clarendon');
     expect(line).toContain('REQUIRED');
