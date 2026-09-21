@@ -129,7 +129,11 @@ function fieldSpec(service: CatalogService): string {
   const rendered = fields.map((field) => {
     const key = truncate(field.key, MAX_CHOICE_CHARS) || 'field';
     const type = truncate(field.type, 20) || 'text';
-    const values = field.type === 'dropdown' ? normalizeChoices(field.choices) : [];
+    // A font field is a choice list too: without the values here the model is
+    // told "fonts=text", invents a font name, and the backend rejects the order
+    // ("Invalid font … — valid: …"). Same for any future choice-shaped type.
+    const values =
+      field.type === 'dropdown' || field.type === 'font' ? normalizeChoices(field.choices) : [];
     const kind = values.length > 0 ? values.join('|') : type === 'number' ? 'number' : 'text';
     return `${key}=${kind}${field.required ? ' REQUIRED' : ''}`;
   });

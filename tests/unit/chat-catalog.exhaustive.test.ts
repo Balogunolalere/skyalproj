@@ -104,6 +104,25 @@ describe('formatServiceLine — field boundaries', () => {
     expect(formatServiceLine(svc({ type: 't', label: 'L', category: '' }))).toContain('other');
   });
 
+  it('lists a FONT field\'s choices, so the model cannot invent a font name', () => {
+    // `fieldSpec` decides what the assistant is told about each option. A font
+    // field is a choice list like a dropdown: described as plain "text" the
+    // model invents a name and the backend rejects the whole order
+    // ("Invalid font … — valid: …"), which is a dead end in chat.
+    const line = formatServiceLine(
+      svc({
+        type: 't',
+        label: 'Topper',
+        optionFields: [
+          { key: 'fonts', label: 'Font', type: 'font', choices: [{ value: 'Great Vibes' }, { value: 'Clarendon' }], required: true },
+        ],
+      } as Partial<CatalogService>),
+    );
+    expect(line).toContain('fonts=Great Vibes|Clarendon');
+    expect(line).toContain('REQUIRED');
+    expect(line).not.toContain('fonts=text');
+  });
+
   it("falls back to 'other' when the category is undefined", () => {
     const noCat = { type: 't', label: 'L' } as CatalogService;
     expect(formatServiceLine(noCat)).toContain('other');
