@@ -1,42 +1,42 @@
-# Font files for the customer preview
+# Fonts the customer can choose
 
-The font picker renders each name IN ITS OWN FACE and shows a live preview of the
-customer's text. The real typefaces are commercial, so they are not in this repo:
-until a file is present, the preview falls back to a free near-equivalent (see
-`styles` in `src/lib/print-fonts.ts`), which still shows script vs slab vs
-handwritten — just not the exact letterforms.
+The font picker shows each name **in its own face** and renders the customer's own
+text live, so they can compare before ordering. The ORDER records the real font
+name — production is unaffected by anything here.
 
-Drop the real files here with EXACTLY these names and the preview becomes exact,
-with no code change (each stack already lists the real family first):
+## What the customer sees, and why
 
-| file | font |
+The ten faces we cut with are commercial: a desktop licence (the one you need to
+cut with them) does **not** include the right to embed them in a website, and some
+sellers forbid web embedding outright. So the preview renders each choice in the
+closest free typeface instead. The customer sees the *style* faithfully; the
+operator cuts with the real font.
+
+| font we cut with | shown in the preview as |
 |---|---|
-| `SamanthaUprightPROW05.woff2` | Samantha Upright PRO W05 |
-| `StyleScript.woff2` | Style Script (free — can also be served from Google) |
-| `LavanderiaSturdy.woff2` | Lavanderia Sturdy |
-| `AthenaOfTheOcean.woff2` | Athena of the Ocean |
-| `Amarillo.woff2` | Amarillo |
-| `Sunshine.woff2` | Sunshine |
-| `WhiteDream.woff2` | White Dream |
-| `Gabriola.woff2` | Gabriola |
-| `Clarendon.woff2` | Clarendon |
-| `BabyValentina.woff2` | Baby Valentina |
+| Samantha Upright PRO W05 | Great Vibes |
+| **Style Script** | Style Script — this one IS the real font (free, open licence) |
+| Lavanderia Sturdy | Yellowtail |
+| Athena of the Ocean | Alex Brush |
+| Amarillo | Allura |
+| Sunshine | Courgette |
+| White Dream | Parisienne |
+| Gabriola | Cormorant Garamond |
+| Clarendon | Besley (an actual Clarendon revival) |
+| Baby Valentina | Kaushan Script |
 
-`.woff2` loads fastest and is what every current browser takes. If you only have
-`.ttf`/`.otf`, convert first — do not rename the extension.
+The list lives in `src/lib/print-fonts.ts` and is mirrored in the admin backend
+(`skyalxpaberin-admin`), which validates the customer's choice against the same
+names; all three copies are pinned by tests.
 
-Then add one `@font-face` per file (already wired in `src/app/globals.css` under
-"print fonts" — uncomment as files arrive), e.g.
+## Making one preview exact (optional)
 
-```css
-@font-face {
-  font-family: "Clarendon";
-  src: url("/fonts/Clarendon.woff2") format("woff2");
-  font-display: swap;
-}
-```
+If you buy the web licence for a face, or you would rather not use a stand-in for
+it, drop the file here with exactly the name in the `file` field of that font in
+`src/lib/print-fonts.ts` (e.g. `Clarendon.woff2`) and uncomment its `@font-face`
+rule in `src/app/globals.css` — the real family is already first in that font's
+CSS stack, so it wins automatically with no other change.
 
-**Licensing is on us, not on the code.** Most of these are commercial faces and a
-normal desktop licence does not cover web embedding. Either buy the webfont
-licence for each, or leave the file out — the fallback keeps the picker usable
-and the order still records the real font name for production.
+`.woff2` loads fastest. If you only have `.ttf`/`.otf`, convert first — do not
+just rename it. Prefer webfont-licensed files only: these are the same faces that
+appear on a public website.

@@ -12,6 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   PRINT_FONTS,
+  PREVIEW_FALLBACK_FAMILIES,
   PREVIEW_SAMPLE,
   fontStack,
   previewStylesheetHref,
@@ -70,8 +71,11 @@ describe('previewStylesheetHref', () => {
     const href = previewStylesheetHref();
     expect(href.startsWith('https://fonts.googleapis.com/css2?')).toBe(true);
     expect(href).toContain('family=Great+Vibes');
-    expect(href).toContain('family=Zilla+Slab');
+    expect(href).toContain('family=Besley');
     expect(href).toContain('display=swap');
+    // No weight axis: asking a single-weight display face for one makes Google
+    // return 400 for the WHOLE stylesheet, killing every preview.
+    expect(href).not.toContain('wght');
     // One request, not one per font.
     expect(href.match(/family=/g)?.length).toBeGreaterThan(5);
   });
@@ -156,5 +160,56 @@ describe('a font field validates like a choice list', () => {
     expect(validateOptionValues([dd], { colour: 'Blue' }).errors.colour).toBe(
       'Colour must be one of the listed options',
     );
+  });
+});
+
+describe('the free stand-in chosen for each font', () => {
+  /**
+   * What the customer sees. Deliberately a lookalike, not the real typeface:
+   * these are commercial faces and web embedding needs a separate licence
+   * (Creative Fabrica's forbids it outright). The ORDER still records the real
+   * name, so production is unaffected — and dropping the real file into
+   * public/fonts/ upgrades that one preview to exact with no code change.
+   *
+   * A table, not a rule, because the choice is a judgement per font: these were
+   * picked as the closest free equivalent to each face.
+   */
+  const MATCHES: Array<[string, string]> = [
+    ['Samantha Upright PRO W05', 'Great Vibes'],
+    ['Style Script', 'Style Script'],
+    ['Lavanderia Sturdy', 'Yellowtail'],
+    ['Athena of the Ocean', 'Alex Brush'],
+    ['Amarillo', 'Allura'],
+    ['Sunshine', 'Courgette'],
+    ['White Dream', 'Parisienne'],
+    ['Gabriola', 'Cormorant Garamond'],
+    ['Clarendon', 'Besley'],
+    ['Baby Valentina', 'Kaushan Script'],
+  ];
+
+  it('covers every font, in order', () => {
+    expect(PRINT_FONTS.map((f) => f.name)).toEqual(MATCHES.map(([name]) => name));
+  });
+
+  it('names the match in the stack, after the real family', () => {
+    for (const [name, match] of MATCHES) {
+      const font = PRINT_FONTS.find((f) => f.name === name);
+      const families = (font?.styles ?? '').split(',').map((p) => p.trim().replace(/^['"]|['"]$/g, ''));
+      expect(families[0]).toBe(name); // the real face wins when its file is present
+      // Style Script IS the free face, so it is both first and the match.
+      expect(families).toContain(match);
+    }
+  });
+
+  it('lists exactly those families for the stylesheet, with no orphans', () => {
+    const matches = MATCHES.map(([, match]) => match);
+    expect([...PREVIEW_FALLBACK_FAMILIES].sort()).toEqual([...new Set(matches)].sort());
+  });
+
+  it('never asks the free stylesheet for a commercial face', () => {
+    for (const [name] of MATCHES) {
+      if (name === 'Style Script') continue; // free, and its own match
+      expect(PREVIEW_FALLBACK_FAMILIES).not.toContain(name);
+    }
   });
 });

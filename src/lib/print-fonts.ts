@@ -42,15 +42,15 @@ export const PRINT_FONTS: PrintFont[] = [
     file: 'AthenaOfTheOcean.woff2',
     styles: "'Athena of the Ocean', 'Alex Brush', cursive",
   },
-  { name: 'Amarillo', file: 'Amarillo.woff2', styles: "'Amarillo', 'Satisfy', cursive" },
-  { name: 'Sunshine', file: 'Sunshine.woff2', styles: "'Sunshine', 'Pacifico', cursive" },
+  { name: 'Amarillo', file: 'Amarillo.woff2', styles: "'Amarillo', 'Allura', cursive" },
+  { name: 'Sunshine', file: 'Sunshine.woff2', styles: "'Sunshine', 'Courgette', cursive" },
   {
     name: 'White Dream',
     file: 'WhiteDream.woff2',
-    styles: "'White Dream', 'Dancing Script', cursive",
+    styles: "'White Dream', 'Parisienne', cursive",
   },
   { name: 'Gabriola', file: 'Gabriola.woff2', styles: "'Gabriola', 'Cormorant Garamond', serif" },
-  { name: 'Clarendon', file: 'Clarendon.woff2', styles: "'Clarendon', 'Zilla Slab', serif" },
+  { name: 'Clarendon', file: 'Clarendon.woff2', styles: "'Clarendon', 'Besley', serif" },
   {
     name: 'Baby Valentina',
     file: 'BabyValentina.woff2',
@@ -64,11 +64,11 @@ export const PREVIEW_FALLBACK_FAMILIES: string[] = [
   'Style Script',
   'Yellowtail',
   'Alex Brush',
-  'Satisfy',
-  'Pacifico',
-  'Dancing Script',
+  'Allura',
+  'Courgette',
+  'Parisienne',
   'Cormorant Garamond',
-  'Zilla Slab',
+  'Besley',
   'Kaushan Script',
 ];
 
@@ -83,9 +83,10 @@ export function fontStack(name: string | undefined | null): string {
  * offers fonts — a customer ordering a plain cut downloads none of this.
  */
 export function previewStylesheetHref(): string {
-  const families = PREVIEW_FALLBACK_FAMILIES.map(
-    (f) => `family=${f.replace(/ /g, '+')}:wght@400`,
-  ).join('&');
+  // No weight axis: these are single-weight display faces, and asking for an
+  // axis a family does not have makes Google return 400 — which would take the
+  // whole stylesheet down, not just that font.
+  const families = PREVIEW_FALLBACK_FAMILIES.map((f) => `family=${f.replace(/ /g, '+')}`).join('&');
   return `https://fonts.googleapis.com/css2?${families}&display=swap`;
 }
 
