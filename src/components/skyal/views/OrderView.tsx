@@ -31,6 +31,7 @@ import {
   getBusinessCalendar,
 } from "@/lib/business-calendar";
 import { usePreviewFonts } from "@/lib/preview-fonts";
+import { chatOptionSelection } from "@/lib/chat-prefill";
 
 
 /* ── Upload limits (shared by the file picker and the submit path) ── */
@@ -237,6 +238,12 @@ export default function OrderView({
         setServiceType(match.type);
         if (specs.quantity > 0) setQty(specs.quantity);
         if (specs.sla === "Express") setSla("Express");
+        // The options the customer answered in chat, including a font — a
+        // required font cannot be picked on the chat screen, so without this the
+        // order was blocked until they found the picker themselves.
+        const carried = chatOptionSelection(specs, match);
+        if (carried.selectedOptions) setSelectedOptions(carried.selectedOptions);
+        if (carried.selectedVariant) setSelectedVariant(carried.selectedVariant);
         if (specs.delivery === "LOCAL_DELIVERY") {
           setDelivery("lagos");
           if (specs.delivery_address) setAddress(specs.delivery_address);

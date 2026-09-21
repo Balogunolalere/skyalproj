@@ -6,6 +6,7 @@ import { Coord, Heading } from "../primitives";
 import { Logo } from "../Logo";
 import { Send, Trash2, AlertCircle, Paperclip, X, ArrowRight, Loader2, Plus } from "lucide-react";
 import type { ChatSpecs } from "@/lib/chat";
+import { buildChatSpecs } from "@/lib/chat-prefill";
 
 interface Msg {
   id: string;
@@ -218,12 +219,12 @@ export default function ChatView({
                     {m.quote.renderOrderNow && (
                       <button
                         onClick={() => {
-                          const b = (m.quote?.breakdown || {}) as Record<string, unknown>;
-                          const specs: ChatSpecs = {
-                            service_type: typeof b.serviceType === "string" ? b.serviceType : null,
-                            quantity: typeof b.quantity === "number" && b.quantity > 0 ? b.quantity : 1,
-                            sla: b.sla === "Express" ? "Express" : "Standard",
-                          };
+                          // Everything the assistant already knows, options
+                          // and the pickup time included — they used to be dropped
+                          // here, so the form opened empty.
+                          const specs: ChatSpecs = buildChatSpecs(
+                            (m.quote || {}) as unknown as Record<string, unknown>,
+                          );
                           if (onOrderWithQuote) onOrderWithQuote({ specs, context: lastUserQueryRef.current });
                           else onNavigate("order");
                         }}
