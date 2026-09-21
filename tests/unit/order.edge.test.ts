@@ -10,7 +10,8 @@
  *
  * All times are Lagos wall clock (UTC+1): a fixture at T16:00Z is 17:00 Lagos.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import {
+ describe, it, expect, vi, afterEach } from 'vitest';
 import {
   DEFAULT_BUSINESS_CALENDAR,
   isWorkingDayCal,
@@ -32,6 +33,7 @@ import {
   formatPickupISO,
   buildQuotePayload,
   buildOrderPayload,
+  paymentEmailFor,
 } from '@/lib/order';
 import { apiFetch, ApiError } from '@/lib/api';
 
@@ -385,5 +387,34 @@ describe('apiFetch', () => {
     const err = (await apiFetch('/api/x').catch((e) => e)) as ApiError;
     expect(err.status).toBe(0);
     expect(err.message).toContain('Failed to fetch');
+  });
+});
+
+/**
+ * Found by driving the real site in a browser: Skyal synthesised a placeholder
+ * email but sent a TYPED one straight through, so a typo reached Paystack and the
+ * receipt bounced. Now the typo is caught here and a blank still pays.
+ */
+describe('paymentEmailFor — what a card payment is charged against', () => {
+  it('uses a real address as given', () => {
+    expect(paymentEmailFor('ada@example.com', 'SKY-1')).toEqual({ email: 'ada@example.com' });
+    expect(paymentEmailFor('  ada@example.com ', 'SKY-1').email).toBe('ada@example.com');
+  });
+
+  it('stands in for a blank one rather than refusing the sale', () => {
+    const r = paymentEmailFor('', 'SKY-ABC123');
+    expect(r.email).toBe('orderSKY-ABC123@skyal.ng');
+    expect(r.usedPlaceholder).toBe(true);
+    expect(r.error).toBeUndefined();
+  });
+
+  it('treats undefined, null and whitespace as blank', () => {
+    for (const v of [undefined, null, '   ']) expect(paymentEmailFor(v, 'SKY-1').usedPlaceholder).toBe(true);
+  });
+
+  it('refuses a typo, which would bounce the receipt', () => {
+    for (const bad of ['ada', 'ada@', '@example.com', 'ada@example', 'a b@example.com']) {
+      expect(paymentEmailFor(bad, 'SKY-1').error).toBeTruthy();
+    }
   });
 });

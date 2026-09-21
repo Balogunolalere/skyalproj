@@ -158,6 +158,30 @@ export function summarizeOptionErrors(errors: Record<string, string>): string | 
   return messages.length > 2 ? `${head}; +${messages.length - 2} more` : head;
 }
 
+/** Paystack's own idea of an email: enough to catch an obvious typo. */
+export const PAYMENT_EMAIL_RE = /^\S+@\S+\.\S+$/;
+
+/**
+ * The email to charge a card against.
+ *
+ * A blank one becomes a placeholder keyed to the order number — Paystack requires
+ * an email on the transaction and this business reaches customers by phone, so a
+ * missing address must not cost the sale. A TYPED but malformed one is refused,
+ * because that is almost always a typo and the receipt would bounce.
+ */
+export function paymentEmailFor(
+  email: string | null | undefined,
+  orderNumber: string,
+  fallbackDomain = 'skyal.ng',
+): { email: string; error?: string; usedPlaceholder?: boolean } {
+  const typed = (email || '').trim();
+  if (!typed) return { email: `order${orderNumber}@${fallbackDomain}`, usedPlaceholder: true };
+  if (!PAYMENT_EMAIL_RE.test(typed)) {
+    return { email: typed, error: 'That email address does not look right — check it before paying.' };
+  }
+  return { email: typed };
+}
+
 /* ───────────────────────────── Phone validation ───────────────────────────── */
 
 /** Strip spaces, dashes and parens before matching (backend accepts them). */

@@ -19,6 +19,7 @@ import {
   validateOptionValues,
   pickupTierPct,
   type OptionField,
+  paymentEmailFor,
 } from "@/lib/order";
 import { AvailabilityLine } from "../AvailabilityLine";
 import { AddressPicker } from "./AddressPicker";
@@ -694,13 +695,22 @@ export default function OrderView({
         }
       })();
 
+      // A blank email pays on a placeholder (Paystack needs one; the customer is
+      // reached by phone); a typo is refused so the receipt does not bounce.
+      const payEmail = paymentEmailFor(email || order.customerEmail, order.orderNumber);
+      if (payEmail.error) {
+        setSubmitError(payEmail.error);
+        setSubmitting(false);
+        return;
+      }
+
       const paystackData = await apiFetch<{ authorization_url?: string; authorizationUrl?: string; reference?: string; ref?: string }>(
         `/api/payment/initialize`,
         {
           method: "POST",
           body: JSON.stringify({
             amount: order.totalAmount, // Send in Naira, not kobo
-            email: (email.trim() || order.customerEmail || `order${order.orderNumber}@skyal.ng`),
+            email: payEmail.email,
             orderNumber: order.orderNumber,
             brand: "SKYAL",
             metadata: { orderNumber: order.orderNumber, brand: "SKYAL" },
