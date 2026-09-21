@@ -383,7 +383,7 @@ export default function ChatView({
         <div className="bg-vellum border border-hairline p-5">
           <Coord>OTHER WAYS TO REACH US</Coord>
           <p className="text-sm text-thread mt-3 leading-relaxed">
-            skyalservices@gmail.com · 0803 500 3068
+            sales@skyallaser.com · 0803 500 3068
           </p>
         </div>
       </div>

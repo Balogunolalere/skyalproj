@@ -37,6 +37,10 @@ import { apiFetch, ApiError } from '@/lib/api';
 
 /* Fri 18 Sep 2026 17:00 Lagos (at close) — the weekend follows. */
 const FRI_CLOSE = Date.parse('2026-09-18T16:00:00.000Z');
+/** Fixed "now" for cases anchored to the week of Mon 2026-09-21. Without it,
+ *  these fixtures expire: the first case failed on 2026-09-21 at 12:33 Lagos
+ *  because "10:00" had become the past. */
+const BEFORE_MON = Date.parse('2026-09-18T08:00:00.000Z');
 /* Fri 18 Sep 18:30 Lagos — after close. */
 const FRI_LATE = Date.parse('2026-09-18T17:30:00.000Z');
 /* Sat 19 Sep 13:00 Lagos. */
@@ -172,7 +176,7 @@ describe('pickup validation', () => {
       ['2026-09-21', '24:00', false],
       ['2026-09-21', '23:59', false], // outside working hours, not a parser concern only
     ])('parts %s %s → ok=%s', (date, time, ok) => {
-      const iso = pickupISOFromParts(date, time);
+      const iso = pickupISOFromParts(date, time, BEFORE_MON);
       expect(Boolean(iso)).toBe(ok);
       if (ok) expect(new Date(iso!).toISOString()).toContain('2026-09-21');
     });

@@ -1318,10 +1318,10 @@ export default function OrderView({
               <div className="space-y-5">
                 <Field label="Name" value={name} onChange={setName} placeholder="Company or individual" />
                 <div>
-                  <Field label="Phone" value={phone} onChange={setPhone} placeholder="0803 350 3068" type="tel" />
+                  <Field label="Phone" value={phone} onChange={setPhone} placeholder="0803 000 0000" type="tel" />
                   {phone.trim() && !phoneValid && (
                     <p className="text-xs text-oxblood mt-2" role="alert">
-                      Enter a valid Nigerian phone number (e.g. 0803 350 3068).
+                      Enter a valid Nigerian phone number (e.g. 0803 000 0000).
                     </p>
                   )}
                 </div>
