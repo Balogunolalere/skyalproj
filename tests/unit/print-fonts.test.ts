@@ -18,7 +18,7 @@ import {
   previewStylesheetHref,
   previewTextFor,
 } from '@/lib/print-fonts';
-import { validateOptionValues, type OptionField } from '@/lib/order';
+import { buildOrderPayload, validateOptionValues, type OptionField } from '@/lib/order';
 
 /** The names the backend accepts — pinned identically in its own test. */
 const BACKEND_NAMES = [
@@ -211,5 +211,41 @@ describe('the free stand-in chosen for each font', () => {
       if (name === 'Style Script') continue; // free, and its own match
       expect(PREVIEW_FALLBACK_FAMILIES).not.toContain(name);
     }
+  });
+});
+
+describe('what the customer does with a required font (the backend default)', () => {
+  /** Exactly the shape GET /api/services now serves: required, with the house list. */
+  const servedFont: OptionField = {
+    key: 'fonts',
+    label: 'Font',
+    type: 'font',
+    choices: BACKEND_NAMES,
+    required: true,
+  };
+
+  it('blocks the fill-in step until a font is chosen', () => {
+    expect(validateOptionValues([servedFont], {}).valid).toBe(false);
+    expect(validateOptionValues([servedFont], {}).errors.fonts).toBe('Font is required');
+    expect(validateOptionValues([servedFont], { fonts: 'Clarendon' }).valid).toBe(true);
+  });
+
+  it('blocks a font that is not on the list, whatever else is filled in', () => {
+    const values = { fonts: 'Papyrus', message: 'Ada & Tunde' };
+    expect(validateOptionValues([servedFont], values).valid).toBe(false);
+  });
+
+  it('sends the chosen font with the order, so production gets it', () => {
+    const payload = buildOrderPayload({
+      quantity: 1,
+      sla: 'Standard',
+      customerName: 'Ada',
+      customerPhone: '08033503068',
+      customerEmail: '',
+      requestedPickupTime: '2026-12-31T09:00:00.000Z',
+      serviceType: 'plain_topper',
+      selectedOptions: { fonts: 'Clarendon', message: 'Ada & Tunde' },
+    });
+    expect(payload).toMatchObject({ selectedOptions: { fonts: 'Clarendon', message: 'Ada & Tunde' } });
   });
 });
