@@ -43,6 +43,14 @@ interface ApiEnvelope<T> {
   error?: { code?: string; message?: string };
 }
 
+/**
+ * How long a request may stay unanswered before it is abandoned. Without it a
+ * hung request leaves a spinner up forever — a customer reported exactly that as
+ * "stuck on loading services", where nothing ever failed and so nothing could be
+ * shown. A timeout turns the silence into an error the page can display.
+ */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
 export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -50,8 +58,22 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
       ...options,
       headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
       cache: 'no-store',
+      // Callers may pass their own signal (a longer upload, say).
+      signal: options?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
+    // A timeout aborts the fetch and lands here with an AbortError whose own
+    // message ("signal timed out") means nothing to a customer.
+    const timedOut =
+      (err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')) ||
+      (err instanceof Error && /timed out|abort/i.test(err.message));
+    if (timedOut) {
+      throw new ApiError(
+        'This is taking longer than usual. Check your connection and try again.',
+        0,
+        'TIMEOUT',
+      );
+    }
     // fetch only rejects for network/CORS failures. Keep the transport's own
     // message when there is one (status 0 = never reached the server) and fall
     // back to a sentence a customer can act on.
