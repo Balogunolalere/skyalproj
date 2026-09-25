@@ -72,9 +72,27 @@ export const PREVIEW_FALLBACK_FAMILIES: string[] = [
   'Kaushan Script',
 ];
 
+/**
+ * The list in force on this page: the built-in ten until the shop's own catalogue
+ * arrives from the API, then whatever it says.
+ *
+ * The catalogue is data now (`print_fonts` setting, editable in the admin), so a
+ * font added there must render with ITS preview stack — not fall back to the site
+ * font just because this file has never heard of it.
+ */
+let liveFonts: PrintFont[] = PRINT_FONTS;
+
+export function setLiveFonts(fonts: PrintFont[] | null | undefined): void {
+  liveFonts = Array.isArray(fonts) && fonts.length > 0 ? fonts : PRINT_FONTS;
+}
+
+export function knownFonts(): PrintFont[] {
+  return liveFonts;
+}
+
 /** The stack to render a font name with; unknown names inherit the site font. */
 export function fontStack(name: string | undefined | null): string {
-  const font = PRINT_FONTS.find((f) => f.name === name);
+  const font = liveFonts.find((f) => f.name === name) ?? PRINT_FONTS.find((f) => f.name === name);
   return font ? font.styles : 'inherit';
 }
 

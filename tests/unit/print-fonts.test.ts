@@ -9,9 +9,13 @@
  * free near-equivalent after it, so the preview is exact once the real files land
  * in `public/fonts/` and still shows script-vs-slab before that.
  */
-import { describe, it, expect } from 'vitest';
+import {
+  afterEach,
+  describe, it, expect } from 'vitest';
 import {
   PRINT_FONTS,
+  knownFonts,
+  setLiveFonts,
   PREVIEW_FALLBACK_FAMILIES,
   PREVIEW_SAMPLE,
   fontStack,
@@ -247,5 +251,35 @@ describe('what the customer does with a required font (the backend default)', ()
       selectedOptions: { fonts: 'Clarendon', message: 'Ada & Tunde' },
     });
     expect(payload).toMatchObject({ selectedOptions: { fonts: 'Clarendon', message: 'Ada & Tunde' } });
+  });
+});
+
+describe('the shop can add a font without a deploy', () => {
+  afterEach(() => setLiveFonts(null)); // back to the built-in list
+
+  it('renders a font the code has never heard of, in its own face', () => {
+    // The catalogue lives in the admin now, so a new font arrives with its own
+    // preview stack. Without this the picker would render it in the site font and
+    // the customer would see no difference between it and the plain text.
+    setLiveFonts([{ name: 'Pacifico', file: 'Pacifico.woff2', styles: "'Pacifico', cursive" }]);
+    expect(fontStack('Pacifico')).toBe("'Pacifico', cursive");
+    expect(knownFonts().map((f) => f.name)).toEqual(['Pacifico']);
+  });
+
+  it('falls back to the built-in list rather than rendering nothing', () => {
+    setLiveFonts([]);
+    expect(knownFonts()).toEqual(PRINT_FONTS);
+    expect(fontStack('Clarendon')).toContain('Clarendon');
+    setLiveFonts(null);
+    expect(knownFonts()).toEqual(PRINT_FONTS);
+  });
+
+  it('still knows the built-in fonts after a catalogue arrives', () => {
+    setLiveFonts([{ name: 'Pacifico', file: 'Pacifico.woff2', styles: "'Pacifico', cursive" }]);
+    expect(fontStack('Clarendon')).toContain('Clarendon');
+  });
+
+  it('inherits the site font for a name nobody knows', () => {
+    expect(fontStack('Comic Sans')).toBe('inherit');
   });
 });

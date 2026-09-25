@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { previewStylesheetHref } from "./print-fonts";
+import { previewStylesheetHref, setLiveFonts, type PrintFont } from "./print-fonts";
 
 /**
  * Loads the preview stylesheet, once per document, when a service offers fonts.
@@ -15,6 +15,26 @@ import { previewStylesheetHref } from "./print-fonts";
  * deleted.
  */
 export function usePreviewFonts(enabled: boolean): void {
+  // The shop's own font list, fetched once per page session. Public endpoint: the
+  // catalogue is not a secret, and the picker needs it to name the right face.
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_ADMIN_API_URL || "https://skyalxpaberin-admin.vercel.app"}/api/settings?brand=SKYAL`, { cache: "no-store" });
+        const body = await res.json();
+        const raw = body?.data?.print_fonts;
+        if (!raw || cancelled) return;
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (Array.isArray(parsed)) setLiveFonts(parsed as PrintFont[]);
+      } catch {
+        // Offline or blocked: the built-in ten still render.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [enabled]);
+
   useEffect(() => {
     if (!enabled || typeof document === "undefined") return;
     const href = previewStylesheetHref();
