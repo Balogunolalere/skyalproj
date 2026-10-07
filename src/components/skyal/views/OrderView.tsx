@@ -1578,24 +1578,66 @@ export default function OrderView({
               <h2 className="font-display font-semibold text-2xl text-ink mb-1">Review &amp; confirm</h2>
               <p className="text-sm text-thread mb-6">Check everything looks right.</p>
               <dl className="divide-y divide-hairline border-y border-hairline">
-                <Row k="Service" v={customMode ? (customDescription || "Custom job") : service ? `${service.label} · ${CATEGORY_LABELS[service.category] || service.category}` : "—"} />
-                {customMode && (customMaterial || customDimensions) && (
-                  <Row k="Material / size" v={[customMaterial, customDimensions].filter(Boolean).join(" · ")} />
+                {/* EVERY product, not just the last one typed. Naming a single
+                    service here while the Pay button charges for all of them is
+                    how a customer ends up paying for three and seeing one. */}
+                {extraItems.length > 0 ? (
+                  <>
+                    <Row k="Products" v={`${extraItems.length + 1}`} />
+                    {extraItems.map((item, i) => (
+                      <Row
+                        key={i}
+                        k={item.serviceLabel}
+                        v={`×${item.quantity}${
+                          Object.keys(item.selectedOptions).length > 0
+                            ? ` · ${Object.entries(item.selectedOptions)
+                                .map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`)
+                                .join(" · ")}`
+                            : ""
+                        }`}
+                      />
+                    ))}
+                    <Row
+                      k={customMode ? customDescription || "Custom job" : service?.label ?? "—"}
+                      v={`×${qty}${
+                        (service?.optionFields?.length ?? 0) > 0
+                          ? ` · ${service!.optionFields!
+                              .map((f) => `${f.label}: ${selectedOptions[f.key] || "—"}`)
+                              .join(" · ")}`
+                          : selectedVariant
+                            ? ` · Option: ${selectedVariant}`
+                            : ""
+                      }`}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Row k="Service" v={customMode ? (customDescription || "Custom job") : service ? `${service.label} · ${CATEGORY_LABELS[service.category] || service.category}` : "—"} />
+                    {customMode && (customMaterial || customDimensions) && (
+                      <Row k="Material / size" v={[customMaterial, customDimensions].filter(Boolean).join(" · ")} />
+                    )}
+                    <Row k="Quantity" v={customMode ? `${qty}` : `${qty} ${service?.unit ?? ""}`} />
+                    {(service?.optionFields?.length ?? 0) > 0
+                      ? service!.optionFields!.map((f) => (
+                          <Row
+                            key={f.key}
+                            k={f.label}
+                            v={selectedOptions[f.key] || "—"}
+                          />
+                        ))
+                      : selectedVariant
+                        ? <Row k="Option" v={selectedVariant} />
+                        : null}
+                  </>
                 )}
-                <Row k="Quantity" v={customMode ? `${qty}` : `${qty} ${service?.unit ?? ""}`} />
                 <Row k="Turnaround" v={sla} />
                 {pickupValid && <Row k="Pickup" v={formatPickupISO(requestedPickupTime)} />}
-                {(service?.optionFields?.length ?? 0) > 0
-                  ? service!.optionFields!.map((f) => (
-                      <Row
-                        key={f.key}
-                        k={f.label}
-                        v={selectedOptions[f.key] || "—"}
-                      />
-                    ))
-                  : selectedVariant
-                    ? <Row k="Option" v={selectedVariant} />
-                    : null}
+                {extraItems.length > 0 && (
+                  <Row
+                    k="Design files"
+                    v={`${extraItems.reduce((n, i) => n + i.files.length, 0) + uploadFiles.length}`}
+                  />
+                )}
                 <Row k="Delivery" v={delivOption?.label ?? "—"} />
                 {delivery !== "pickup" && address && <Row k="Address" v={address} />}
                 <Row k="Name" v={name || "—"} />
