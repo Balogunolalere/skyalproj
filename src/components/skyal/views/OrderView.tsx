@@ -11,6 +11,7 @@ import type { ChatSpecs, Availability } from "@/lib/chat";
 import {
   buildOrderPayload,
   buildQuotePayload,
+  type OrderItemPayloadArgs,
   formatPickupISO,
   isValidNigerianPhone,
   isValidPickupISO,
@@ -38,7 +39,15 @@ import { chatOptionSelection } from "@/lib/chat-prefill";
 /* ── Upload limits (shared by the file picker and the submit path) ── */
 /** One configured product set aside to be ordered together with others. */
 interface ExtraItem {
+  /** Catalog path. Empty when this line is a described custom job instead. */
   serviceType: string;
+  /**
+   * Custom-job path for THIS line: the server runs the price rules on it
+   * ("cut my jeans" → fabric_custom). A job with no rule is refused by name —
+   * an unpriced job cannot join an order that is paid immediately.
+   */
+  customSpec?: { description: string; material?: string; dimensions?: string; complexity: string };
+  /** What the customer reads in the basket and on the review step. */
   serviceLabel: string;
   quantity: number;
   selectedVariant: string;
@@ -46,6 +55,19 @@ interface ExtraItem {
   /** Still base64 — uploaded per line at submit, so an abandoned basket does
    *  not leave orphaned files in Cloudinary. */
   files: { name: string; data: string }[];
+}
+
+/** One set-aside line as the API expects it. */
+function extraItemToLine(item: ExtraItem): OrderItemPayloadArgs {
+  return {
+    ...(item.serviceType ? { serviceType: item.serviceType } : {}),
+    ...(item.customSpec ? { customSpec: item.customSpec } : {}),
+    quantity: item.quantity,
+    ...(item.serviceType && item.selectedVariant ? { selectedVariant: item.selectedVariant } : {}),
+    ...(item.serviceType && Object.keys(item.selectedOptions).length > 0
+      ? { selectedOptions: item.selectedOptions }
+      : {}),
+  };
 }
 
 const MAX_FILES = 5;
@@ -465,6 +487,12 @@ export default function OrderView({
   useEffect(() => {
     if (!serviceType || !service || step < 1) return;
     let cancelled = false;
+    // CANCEL the previous request, do not merely ignore its answer. The
+    // `cancelled` flag already stopped a stale price being applied, but every
+    // superseded request still stayed in flight — so a customer adjusting the
+    // quantity left a queue of quote calls racing (~1s each against the remote
+    // database) and the sidebar stuck on "Calculating…".
+    const controller = new AbortController();
     setQuoteLoading(true);
     setQuoteError(null);
     const t = setTimeout(async () => {
@@ -491,6 +519,7 @@ export default function OrderView({
         } catch { /* ignore storage errors */ }
         const data = await apiFetch<Record<string, unknown>>(`/api/services/quote`, {
           method: "POST",
+          signal: controller.signal,
           body: JSON.stringify(
             buildQuotePayload({
               serviceType,
@@ -515,22 +544,30 @@ export default function OrderView({
               ...(extraItems.length > 0
                 ? {
                     items: [
-                      ...extraItems.map((item) => ({
-                        serviceType: item.serviceType,
-                        quantity: item.quantity,
-                        selectedVariant: item.selectedVariant || undefined,
-                        selectedOptions:
-                          Object.keys(item.selectedOptions).length > 0
-                            ? item.selectedOptions
-                            : undefined,
-                      })),
-                      {
-                        serviceType,
-                        quantity: qty,
-                        selectedVariant: selectedVariant || undefined,
-                        selectedOptions:
-                          Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
-                      },
+                      ...extraItems.map(extraItemToLine),
+                      ...((customMode && customDescription.trim()) || serviceType
+                        ? [
+                            customMode
+                              ? {
+                                  customSpec: {
+                                    description: customDescription.trim(),
+                                    material: customMaterial.trim() || undefined,
+                                    dimensions: customDimensions.trim() || undefined,
+                                    complexity: "simple",
+                                  },
+                                  quantity: qty,
+                                }
+                              : {
+                                  serviceType,
+                                  quantity: qty,
+                                  selectedVariant: selectedVariant || undefined,
+                                  selectedOptions:
+                                    Object.keys(selectedOptions).length > 0
+                                      ? selectedOptions
+                                      : undefined,
+                                },
+                          ]
+                        : []),
                     ],
                   }
                 : {}),
@@ -541,18 +578,20 @@ export default function OrderView({
         setQuote(data as never);
         setQuoteError(null);
       } catch (err) {
-        if (!cancelled) {
+        // An abort is us replacing this request, not a failure worth showing.
+        if (!cancelled && !controller.signal.aborted) {
           setQuote(null);
           // The engine's message is the useful part ("Pickup must be a working
           // day", "Delivery address could not be verified") — show it.
           setQuoteError((err as ApiError)?.message || null);
         }
       } finally {
-        if (!cancelled) setQuoteLoading(false);
+        if (!cancelled && !controller.signal.aborted) setQuoteLoading(false);
       }
     }, 350);
     return () => {
       cancelled = true;
+      controller.abort();
       clearTimeout(t);
     };
   }, [serviceType, qty, sla, delivery, referral, service, step, delivOption, address, requestedPickupTime, selectedVariant, selectedOptions, extraItems]);
@@ -649,23 +688,45 @@ export default function OrderView({
    *  product fields so the next one can be configured. Customer details, the
    *  pickup time and delivery stay put — they belong to the ORDER. */
   const addCurrentItemToOrder = () => {
-    if (!serviceType) return;
+    const isCustom = customMode && customDescription.trim().length > 0;
+    if (!isCustom && !serviceType) return;
     setExtraItems((prev) => [
       ...prev,
-      {
-        serviceType,
-        serviceLabel: service?.label ?? serviceType,
-        quantity: qty,
-        selectedVariant,
-        selectedOptions,
-        files: uploadFiles,
-      },
+      isCustom
+        ? {
+            serviceType: "",
+            customSpec: {
+              description: customDescription.trim(),
+              material: customMaterial.trim() || undefined,
+              dimensions: customDimensions.trim() || undefined,
+              complexity: "simple",
+            },
+            serviceLabel: customDescription.trim() || "Custom job",
+            quantity: qty,
+            selectedVariant: "",
+            selectedOptions: {},
+            files: uploadFiles,
+          }
+        : {
+            serviceType,
+            serviceLabel: service?.label ?? serviceType,
+            quantity: qty,
+            selectedVariant,
+            selectedOptions,
+            files: uploadFiles,
+          },
     ]);
     setServiceType("");
     setQty(1);
     setSelectedVariant("");
     setSelectedOptions({});
     setUploadFiles([]);
+    if (isCustom) {
+      setCustomMode(false);
+      setCustomDescription("");
+      setCustomMaterial("");
+      setCustomDimensions("");
+    }
     // Back to the SERVICE list, so the customer picks the next product. Without
     // this they were left on the details step with no service selected — the
     // form looked broken and there was no way forward but Back.
@@ -733,12 +794,7 @@ export default function OrderView({
       const groupedItems = grouped
         ? await Promise.all(
             extraItems.map(async (item) => ({
-              serviceType: item.serviceType,
-              quantity: item.quantity,
-              selectedVariant: item.selectedVariant || undefined,
-              selectedOptions:
-                Object.keys(item.selectedOptions).length > 0 ? item.selectedOptions : undefined,
-              customerNotes: undefined,
+              ...extraItemToLine(item),
               ...(await uploadFilesFor(item.files, 'skyal-designs')),
             })),
           )
@@ -782,11 +838,22 @@ export default function OrderView({
               items: [
                 ...groupedItems!,
                 {
-                  serviceType,
+                  ...(customMode
+                    ? {
+                        customSpec: {
+                          description: customDescription.trim(),
+                          material: customMaterial.trim() || undefined,
+                          dimensions: customDimensions.trim() || undefined,
+                          complexity: "simple",
+                        },
+                      }
+                    : {
+                        serviceType,
+                        selectedVariant: selectedVariant || undefined,
+                        selectedOptions:
+                          Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
+                      }),
                   quantity: qty,
-                  selectedVariant: selectedVariant || undefined,
-                  selectedOptions:
-                    Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
                   ...(designFileUrl ? { designFileUrl, designFilePublicId } : {}),
                 },
               ],
@@ -1434,11 +1501,11 @@ export default function OrderView({
                 {/* Buying more than one thing? Set this product aside and
                     configure the next one — pickup, delivery and contact details
                     stay put, because they belong to the order. */}
-                {!customMode && (
+                {(
                   <button
                     type="button"
                     onClick={addCurrentItemToOrder}
-                    disabled={!serviceType}
+                    disabled={customMode ? !customDescription.trim() : !serviceType}
                     data-testid="order-add-another-item"
                     className="w-full text-left p-4 border border-dashed border-ink/30 bg-bone hover:border-laser hover:bg-vellum transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
@@ -1449,8 +1516,9 @@ export default function OrderView({
                           Add another product to this order
                         </div>
                         <div className="text-xs text-thread mt-0.5 leading-relaxed">
-                          Another logo, a matching topper, a second size — all on one order and one
-                          payment.
+                          {customMode
+                            ? "Keep this job on the order and add a catalog product beside it — one order, one payment."
+                            : "Another logo, a matching topper, a second size — all on one order and one payment."}
                         </div>
                       </div>
                     </div>
