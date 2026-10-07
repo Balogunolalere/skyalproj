@@ -666,6 +666,10 @@ export default function OrderView({
     setSelectedVariant("");
     setSelectedOptions({});
     setUploadFiles([]);
+    // Back to the SERVICE list, so the customer picks the next product. Without
+    // this they were left on the details step with no service selected — the
+    // form looked broken and there was no way forward but Back.
+    setStep(0);
   };
 
   const removeExtraItem = (index: number) => {
