@@ -374,6 +374,133 @@ describe('buildOrderPayload', () => {
     expect('serviceType' in payload).toBe(false);
   })
 
+  /* ── grouped orders: several products, one purchase ───────────────────── */
+
+  /*
+   * The owner's case: "this person wanted Ercos logo, wanted Letter K logo
+   * (4 pieces), wanted Technology Limited logo … it's supposed to be with the
+   * same order." The wire format matters more than the UI here: the backend
+   * prices express ONCE for the order, so a payload that also carried
+   * `serviceType` + `quantity` would be two contradictory instructions (it
+   * answers 400 GROUP_MIXED_INPUT rather than guess).
+   */
+
+  test('grouped: sends items INSTEAD of serviceType/quantity', () => {
+    const payload = buildOrderPayload({
+      quantity: 1, // ignored for a group
+      sla: 'Standard',
+      customerName: 'Feyikemi korede',
+      customerPhone: '08035003068',
+      customerEmail: '',
+      requestedPickupTime: PICKUP,
+      deliveryMethod: 'PICKUP',
+      items: [
+        { serviceType: 'logo_print', quantity: 4, selectedOptions: { cake_size: '10 in' }, designFileUrl: 'https://cdn/ercos.png' },
+        { serviceType: 'logo_print', quantity: 5, selectedOptions: { cake_size: '10 in' }, designFileUrl: 'https://cdn/letterk.png' },
+        { serviceType: 'logo_print', quantity: 1, selectedOptions: { cake_size: '14 in' }, designFileUrl: 'https://cdn/tech.png' },
+      ],
+    });
+    expect(payload.items).toHaveLength(3);
+    // The contradictory single-item fields must be ABSENT, not merely ignored.
+    expect('serviceType' in payload).toBe(false);
+    expect('quantity' in payload).toBe(false);
+    expect('sla' in payload).toBe(false);
+    // Order-level fields still travel once.
+    expect(payload.requestedPickupTime).toBe(PICKUP);
+    expect(payload.customerName).toBe('Feyikemi korede');
+  })
+
+  test('grouped: gives each line its own quantity, options and artwork', () => {
+    const payload = buildOrderPayload({
+      quantity: 1,
+      sla: 'Standard',
+      customerName: 'Ada',
+      customerPhone: '08035003068',
+      customerEmail: '',
+      requestedPickupTime: PICKUP,
+      items: [
+        { serviceType: 'logo_print', quantity: 4, selectedOptions: { cake_size: '10 in' }, designFileUrl: 'https://cdn/a.png' },
+        { serviceType: 'topper_acrylic', quantity: 1, selectedOptions: { size: '11 in' }, designFileUrl: 'https://cdn/b.png', customerNotes: 'gold finish' },
+      ],
+    });
+    const items = payload.items as Record<string, unknown>[];
+    expect(items[0]).toMatchObject({ serviceType: 'logo_print', quantity: 4, selectedOptions: { cake_size: '10 in' }, designFileUrl: 'https://cdn/a.png' });
+    expect(items[1]).toMatchObject({ serviceType: 'topper_acrylic', quantity: 1, customerNotes: 'gold finish' });
+  })
+
+  test('grouped: a line can be a custom job', () => {
+    const payload = buildOrderPayload({
+      quantity: 1,
+      sla: 'Standard',
+      customerName: 'Ada',
+      customerPhone: '08035003068',
+      customerEmail: '',
+      requestedPickupTime: PICKUP,
+      items: [
+        { serviceType: 'logo_print', quantity: 2 },
+        { quantity: 1, customSpec: { description: 'Cut my jeans', complexity: 'simple' } },
+      ],
+    });
+    const items = payload.items as Record<string, unknown>[];
+    expect(items[1].customSpec).toEqual({ description: 'Cut my jeans', complexity: 'simple' });
+    expect('serviceType' in items[1]).toBe(false);
+  })
+
+  test('ONE item is not a group — it stays the single-item shape', () => {
+    // One product is the overwhelming majority of orders; routing it through the
+    // group path would change a shape that already works.
+    const payload = buildOrderPayload({
+      quantity: 3,
+      sla: 'Express',
+      customerName: 'Ada',
+      customerPhone: '08035003068',
+      customerEmail: '',
+      requestedPickupTime: PICKUP,
+      serviceType: 'logo_print',
+      selectedOptions: { cake_size: '10 in' },
+      items: [{ serviceType: 'logo_print', quantity: 3, selectedOptions: { cake_size: '10 in' } }],
+    });
+    expect('items' in payload).toBe(false);
+    expect(payload.serviceType).toBe('logo_print');
+    expect(payload.quantity).toBe(3);
+  })
+
+  test('grouped: a line never sends BOTH selectedOptions and selectedVariant', () => {
+    const payload = buildOrderPayload({
+      quantity: 1,
+      sla: 'Standard',
+      customerName: 'Ada',
+      customerPhone: '08035003068',
+      customerEmail: '',
+      requestedPickupTime: PICKUP,
+      items: [
+        { serviceType: 'a', quantity: 1, selectedOptions: { k: 'v' }, selectedVariant: 'legacy' },
+        { serviceType: 'b', quantity: 1, selectedVariant: 'Gold' },
+      ],
+    });
+    const items = payload.items as Record<string, unknown>[];
+    expect(items[0].selectedOptions).toEqual({ k: 'v' });
+    expect('selectedVariant' in items[0]).toBe(false);
+    expect(items[1].selectedVariant).toBe('Gold');
+  })
+
+  test('grouped quote: same items shape, so quote and order agree', () => {
+    const quote = buildQuotePayload({
+      serviceType: '',
+      quantity: 1,
+      sla: 'Standard',
+      requestedPickupTime: PICKUP,
+      customerPhone: '08035003068',
+      items: [
+        { serviceType: 'logo_print', quantity: 4, selectedOptions: { cake_size: '10 in' } },
+        { serviceType: 'logo_print', quantity: 5, selectedOptions: { cake_size: '14 in' } },
+      ],
+    });
+    expect(quote.items).toHaveLength(2);
+    expect('serviceType' in quote).toBe(false);
+    expect('quantity' in quote).toBe(false);
+  })
+
   test('never fabricates a customer email — empty string when absent', () => {
     const payload = buildOrderPayload({
       quantity: 1,

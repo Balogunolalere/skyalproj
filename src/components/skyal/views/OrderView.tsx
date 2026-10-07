@@ -36,6 +36,18 @@ import { chatOptionSelection } from "@/lib/chat-prefill";
 
 
 /* ── Upload limits (shared by the file picker and the submit path) ── */
+/** One configured product set aside to be ordered together with others. */
+interface ExtraItem {
+  serviceType: string;
+  serviceLabel: string;
+  quantity: number;
+  selectedVariant: string;
+  selectedOptions: Record<string, string>;
+  /** Still base64 — uploaded per line at submit, so an abandoned basket does
+   *  not leave orphaned files in Cloudinary. */
+  files: { name: string; data: string }[];
+}
+
 const MAX_FILES = 5;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB each
 const MAX_TOTAL_SIZE = 25 * 1024 * 1024; // 25MB total
@@ -204,6 +216,16 @@ export default function OrderView({
   // Custom job mode ("Something else" / chat handoff with no catalog match):
   // describe the job, we price it via rules or confirm pricing quickly.
   const [customMode, setCustomMode] = useState(false);
+  /**
+   * Products already added to THIS order.
+   *
+   * The owner's case: "this person wanted Ercos logo, wanted Letter K logo
+   * (4 pieces), wanted Technology Limited logo … it's supposed to be with the
+   * same order." Without this, buying three things meant three orders, three
+   * payments and three express fees. Each entry keeps its OWN quantity, options
+   * and files; pickup, delivery and contact details stay order-level.
+   */
+  const [extraItems, setExtraItems] = useState<ExtraItem[]>([]);
   const [customDescription, setCustomDescription] = useState("");
   const [customMaterial, setCustomMaterial] = useState("");
   const [customDimensions, setCustomDimensions] = useState("");
@@ -487,6 +509,31 @@ export default function OrderView({
               selectedVariant: selectedVariant || undefined,
               selectedOptions:
                 Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
+              // The set-aside products are part of the order being priced. Quoting
+              // only the line being typed would show a total the customer is not
+              // going to pay — express is charged once for the WHOLE order.
+              ...(extraItems.length > 0
+                ? {
+                    items: [
+                      ...extraItems.map((item) => ({
+                        serviceType: item.serviceType,
+                        quantity: item.quantity,
+                        selectedVariant: item.selectedVariant || undefined,
+                        selectedOptions:
+                          Object.keys(item.selectedOptions).length > 0
+                            ? item.selectedOptions
+                            : undefined,
+                      })),
+                      {
+                        serviceType,
+                        quantity: qty,
+                        selectedVariant: selectedVariant || undefined,
+                        selectedOptions:
+                          Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
+                      },
+                    ],
+                  }
+                : {}),
             }),
           ),
         });
@@ -508,7 +555,7 @@ export default function OrderView({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [serviceType, qty, sla, delivery, referral, service, step, delivOption, address, requestedPickupTime, selectedVariant, selectedOptions]);
+  }, [serviceType, qty, sla, delivery, referral, service, step, delivOption, address, requestedPickupTime, selectedVariant, selectedOptions, extraItems]);
 
   /* ── Group services by category for the picker ── */
   const servicesByCategory = useMemo(() => {
@@ -525,10 +572,16 @@ export default function OrderView({
        legacy flat `expressSurchargePct` is no longer the pricing rule. ── */
   const fallbackTierPct = requestedPickupTime ? pickupTierPct(requestedPickupTime, Date.now(), cal) : 0;
   const fallbackEstimate = useMemo(() => {
-    if (!service) return 0;
-    const base = service.basePriceNaira * qty;
+    if (!service && extraItems.length === 0) return 0;
+    const heldBase = extraItems.reduce((sum, item) => {
+      const svc = services.find((x) => x.type === item.serviceType);
+      return sum + (svc ? svc.basePriceNaira * item.quantity : 0);
+    }, 0);
+    const base = (service ? service.basePriceNaira * qty : 0) + heldBase;
+    // Express is charged once for the WHOLE order, so the tier applies to the
+    // summed base rather than to one line.
     return Math.round(base * (1 + fallbackTierPct) + (delivOption?.cost ?? 0));
-  }, [service, qty, fallbackTierPct, delivOption]);
+  }, [service, qty, extraItems, services, fallbackTierPct, delivOption]);
 
   const quoteTotal = quote?.quoteNaira ?? fallbackEstimate;
   const deliveryFee = quote?.breakdown?.deliveryFee ?? delivOption?.cost ?? 0;
@@ -558,6 +611,66 @@ export default function OrderView({
     (step === 3 && (delivery === "pickup" || address.trim().length > 4)) ||
     (step === 4 && !!name.trim() && phoneValid) ||
     step === 5;
+
+  /**
+   * Upload one line's files and return the order-payload fields for them.
+   *
+   * Best-effort by design (a failed upload must not lose the sale), and a clean
+   * extraction because a grouped order uploads per LINE — three logos are three
+   * files, and the single-order columns never had room for that.
+   */
+  const uploadFilesFor = async (
+    list: { name: string; data: string }[],
+    folder: string,
+  ): Promise<{ designFileUrl?: string; designFilePublicId?: string }> => {
+    const uploaded: { url: string; publicId: string; name: string }[] = [];
+    for (const file of list) {
+      if (file.data.length > MAX_FILE_SIZE) continue;
+      try {
+        const uploadData = await apiFetch<{ url?: string; publicId?: string }>('/api/upload', {
+          method: 'POST',
+          body: JSON.stringify({ file: file.data, folder }),
+        });
+        if (uploadData?.url) {
+          uploaded.push({ url: uploadData.url, publicId: uploadData.publicId || '', name: file.name });
+        }
+      } catch {
+        // Individual file upload failure is non-blocking.
+      }
+    }
+    if (uploaded.length === 0) return {};
+    return {
+      designFileUrl: JSON.stringify(uploaded.map((f) => ({ url: f.url, publicId: f.publicId, name: f.name }))),
+      designFilePublicId: uploaded.map((f) => f.publicId).filter(Boolean).join(',') || undefined,
+    };
+  };
+
+  /** Move the product currently being configured into the order, and clear the
+   *  product fields so the next one can be configured. Customer details, the
+   *  pickup time and delivery stay put — they belong to the ORDER. */
+  const addCurrentItemToOrder = () => {
+    if (!serviceType) return;
+    setExtraItems((prev) => [
+      ...prev,
+      {
+        serviceType,
+        serviceLabel: service?.label ?? serviceType,
+        quantity: qty,
+        selectedVariant,
+        selectedOptions,
+        files: uploadFiles,
+      },
+    ]);
+    setServiceType("");
+    setQty(1);
+    setSelectedVariant("");
+    setSelectedOptions({});
+    setUploadFiles([]);
+  };
+
+  const removeExtraItem = (index: number) => {
+    setExtraItems((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const submit = async () => {
     setSubmitting(true);
@@ -610,6 +723,23 @@ export default function OrderView({
         }
       }
 
+      // A grouped order uploads PER LINE: each product keeps its own artwork,
+      // so the third logo's file is not lost behind the first.
+      const grouped = extraItems.length > 0;
+      const groupedItems = grouped
+        ? await Promise.all(
+            extraItems.map(async (item) => ({
+              serviceType: item.serviceType,
+              quantity: item.quantity,
+              selectedVariant: item.selectedVariant || undefined,
+              selectedOptions:
+                Object.keys(item.selectedOptions).length > 0 ? item.selectedOptions : undefined,
+              customerNotes: undefined,
+              ...(await uploadFilesFor(item.files, 'skyal-designs')),
+            })),
+          )
+        : null;
+
       // Build designFileUrl as JSON array (backward compatible with single URL)
       const designFileUrl = uploadedFiles.length > 0
         ? JSON.stringify(uploadedFiles.map(f => ({ url: f.url, publicId: f.publicId, name: f.name })))
@@ -641,21 +771,37 @@ export default function OrderView({
         // Customer notes contain ONLY the notes — design file names travel in
         // designFileUrl and the referral code travels as referralCode.
         customerNotes: notes.trim() || undefined,
-        ...(customMode
+        ...(grouped
           ? {
-              customSpec: {
-                description: customDescription.trim(),
-                material: customMaterial.trim() || undefined,
-                dimensions: customDimensions.trim() || undefined,
-                complexity: 'simple',
-              },
+              // The current product becomes the LAST line — the earlier ones were
+              // already set aside, and the customer's order of adding is kept.
+              items: [
+                ...groupedItems!,
+                {
+                  serviceType,
+                  quantity: qty,
+                  selectedVariant: selectedVariant || undefined,
+                  selectedOptions:
+                    Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
+                  ...(designFileUrl ? { designFileUrl, designFilePublicId } : {}),
+                },
+              ],
             }
-          : {
-              serviceType,
-              selectedVariant: selectedVariant || undefined,
-              selectedOptions:
-                Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
-            }),
+          : customMode
+            ? {
+                customSpec: {
+                  description: customDescription.trim(),
+                  material: customMaterial.trim() || undefined,
+                  dimensions: customDimensions.trim() || undefined,
+                  complexity: 'simple',
+                },
+              }
+            : {
+                serviceType,
+                selectedVariant: selectedVariant || undefined,
+                selectedOptions:
+                  Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
+              }),
       });
 
       const order = await apiFetch<CreatedOrder>(`/api/orders`, {
@@ -902,6 +1048,51 @@ export default function OrderView({
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-10">
         {/* ── Step body ── */}
         <div>
+          {/* What is already in this order. Shown on EVERY step, because "what am
+              I actually buying" should never be a surprise on the last one. */}
+          {extraItems.length > 0 && (
+            <div className="mb-8 border border-ink/15 bg-bone p-4" data-testid="order-items-panel">
+              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread mb-3">
+                In this order ({extraItems.length + (serviceType ? 1 : 0)})
+              </div>
+              <ul className="space-y-2.5">
+                {extraItems.map((item, i) => (
+                  <li key={i} className="flex items-start justify-between gap-3 text-sm">
+                    <div className="min-w-0">
+                      <div className="text-ink">
+                        {item.serviceLabel}{" "}
+                        <span className="font-mono text-thread tnum">×{item.quantity}</span>
+                      </div>
+                      {Object.keys(item.selectedOptions).length > 0 && (
+                        <div className="text-xs text-thread mt-0.5">
+                          {Object.entries(item.selectedOptions)
+                            .map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`)
+                            .join(" · ")}
+                        </div>
+                      )}
+                      {item.files.length > 0 && (
+                        <div className="text-xs text-thread mt-0.5">
+                          {item.files.length} file{item.files.length > 1 ? "s" : ""}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => removeExtraItem(i)}
+                      className="text-thread hover:text-oxblood shrink-0 text-xs underline"
+                      aria-label={`Remove ${item.serviceLabel}`}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 text-xs text-thread leading-relaxed">
+                One order, one payment, one delivery — and express is charged once for the whole
+                order, not once per product.
+              </p>
+            </div>
+          )}
+
           {step === 0 && (
             <div>
               <h2 className="font-display font-semibold text-2xl text-ink mb-1">Choose a service</h2>
@@ -1235,6 +1426,32 @@ export default function OrderView({
                     className="mt-2 w-full bg-bone border border-hairline px-4 py-3 text-sm text-ink focus:border-laser outline-none resize-none"
                   />
                 </div>
+
+                {/* Buying more than one thing? Set this product aside and
+                    configure the next one — pickup, delivery and contact details
+                    stay put, because they belong to the order. */}
+                {!customMode && (
+                  <button
+                    type="button"
+                    onClick={addCurrentItemToOrder}
+                    disabled={!serviceType}
+                    data-testid="order-add-another-item"
+                    className="w-full text-left p-4 border border-dashed border-ink/30 bg-bone hover:border-laser hover:bg-vellum transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="font-display font-semibold text-lg text-laser leading-none">+</span>
+                      <div className="min-w-0">
+                        <div className="font-medium text-ink text-sm">
+                          Add another product to this order
+                        </div>
+                        <div className="text-xs text-thread mt-0.5 leading-relaxed">
+                          Another logo, a matching topper, a second size — all on one order and one
+                          payment.
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                )}
               </div>
             </div>
           ))}

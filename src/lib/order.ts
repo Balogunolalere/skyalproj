@@ -455,6 +455,8 @@ export interface QuotePayloadArgs {
   customerPhone?: string;
   selectedVariant?: string;
   selectedOptions?: Record<string, string>;
+  /** Quote a GROUP instead of a single service — same lines as an order. */
+  items?: OrderItemPayloadArgs[];
 }
 
 /**
@@ -463,25 +465,83 @@ export interface QuotePayloadArgs {
  * mutually exclusive).
  */
 export function buildQuotePayload(args: QuotePayloadArgs): Record<string, unknown> {
+  const grouped = Array.isArray(args.items) && args.items.length > 1;
+
   const payload: Record<string, unknown> = {
     brand: 'SKYAL',
-    serviceType: args.serviceType,
-    quantity: args.quantity,
-    sla: args.sla,
     requestedPickupTime: args.requestedPickupTime,
   };
+
+  if (grouped) {
+    payload.items = args.items!.map((item) => {
+      const line: Record<string, unknown> = { quantity: item.quantity };
+      if (item.serviceType) {
+        line.serviceType = item.serviceType;
+        if (item.selectedOptions && Object.keys(item.selectedOptions).length > 0) {
+          line.selectedOptions = item.selectedOptions;
+        } else if (item.selectedVariant) {
+          line.selectedVariant = item.selectedVariant;
+        }
+      }
+      if (item.customSpec) line.customSpec = item.customSpec;
+      return line;
+    });
+  } else {
+    payload.serviceType = args.serviceType;
+    payload.quantity = args.quantity;
+    payload.sla = args.sla;
+  }
   if (args.deliveryMethod) payload.deliveryMethod = args.deliveryMethod;
   if (args.deliveryAddress) payload.deliveryAddress = args.deliveryAddress;
   if (args.referralCode) payload.referralCode = args.referralCode;
   // Digits only: the client accepts separators (including a leading paren, which
   // the backend's regex rejects), so send the normalised form.
   if (args.customerPhone) payload.customerPhone = stripPhoneFormatting(args.customerPhone);
+  if (grouped) return payload; // the lines carry their own options
   if (args.selectedOptions && Object.keys(args.selectedOptions).length > 0) {
     payload.selectedOptions = args.selectedOptions;
   } else if (args.selectedVariant) {
     payload.selectedVariant = args.selectedVariant;
   }
   return payload;
+}
+
+/**
+ * ONE product inside a multi-product order.
+ *
+ * A real order is often several products bought together: "this person wanted
+ * Ercos logo, wanted Letter K logo (4 pieces), wanted Technology Limited logo …
+ * it's supposed to be with the same order." Each line carries its OWN quantity,
+ * its own options and its own artwork, because three logos are three files.
+ *
+ * Order-level things — pickup time, delivery, name/phone/email, notes — are NOT
+ * here: there is one of each per order, which is the whole point of buying the
+ * products together.
+ */
+export interface OrderItemPayloadArgs {
+  /** Catalog path. */
+  serviceType?: string;
+  quantity: number;
+  selectedVariant?: string;
+  selectedOptions?: Record<string, string>;
+  /** Custom-job path for THIS line (the admin runs the rule lookup). */
+  customSpec?: Record<string, unknown>;
+  /** This line's own artwork. */
+  designFileUrl?: string;
+  designFilePublicId?: string;
+  customerNotes?: string;
+}
+
+/** Serialize one line's uploaded files the way the single-item path does — a
+ *  JSON array in `designFileUrl`, which the backend stores verbatim. */
+export function itemFileFields(
+  files: Array<{ url: string; publicId?: string; name?: string }>,
+): { designFileUrl?: string; designFilePublicId?: string } {
+  if (files.length === 0) return {};
+  return {
+    designFileUrl: JSON.stringify(files.map((f) => ({ url: f.url, publicId: f.publicId, name: f.name }))),
+    designFilePublicId: files.map((f) => f.publicId).filter(Boolean).join(',') || undefined,
+  };
 }
 
 export interface OrderPayloadArgs {
@@ -504,28 +564,67 @@ export interface OrderPayloadArgs {
   selectedOptions?: Record<string, string>;
   /** Custom-job path (admin runs the rule lookup). */
   customSpec?: Record<string, unknown>;
+  /**
+   * Two or more products bought together. When present the single-item fields
+   * above are NOT sent — the backend refuses `items` alongside
+   * `serviceType`/`customSpec` (400 GROUP_MIXED_INPUT) rather than guess which
+   * one was meant.
+   */
+  items?: OrderItemPayloadArgs[];
 }
 
 /** Build the POST /api/orders body — shared shape for catalog AND custom jobs. */
 export function buildOrderPayload(args: OrderPayloadArgs): Record<string, unknown> {
+  // A GROUPED order sends its lines INSTEAD of a single service+quantity: the
+  // backend prices express once for the order, so sending both would be two
+  // contradictory instructions.
+  const grouped = Array.isArray(args.items) && args.items.length > 1;
+
   const payload: Record<string, unknown> = {
     brand: 'SKYAL',
-    quantity: args.quantity,
-    sla: args.sla,
     customerName: args.customerName,
     // Digits only — see buildQuotePayload.
     customerPhone: stripPhoneFormatting(args.customerPhone),
     customerEmail: args.customerEmail,
     requestedPickupTime: args.requestedPickupTime,
   };
+
+  if (grouped) {
+    payload.items = args.items!.map((item) => {
+      const line: Record<string, unknown> = { quantity: item.quantity };
+      if (item.serviceType) {
+        line.serviceType = item.serviceType;
+        if (item.selectedOptions && Object.keys(item.selectedOptions).length > 0) {
+          line.selectedOptions = item.selectedOptions;
+        } else if (item.selectedVariant) {
+          line.selectedVariant = item.selectedVariant;
+        }
+      }
+      if (item.customSpec) line.customSpec = item.customSpec;
+      if (item.designFileUrl) {
+        line.designFileUrl = item.designFileUrl;
+        if (item.designFilePublicId) line.designFilePublicId = item.designFilePublicId;
+      }
+      if (item.customerNotes) line.customerNotes = item.customerNotes;
+      return line;
+    });
+  } else {
+    payload.quantity = args.quantity;
+    payload.sla = args.sla;
+  }
   if (args.deliveryMethod) payload.deliveryMethod = args.deliveryMethod;
   if (args.deliveryAddress) payload.deliveryAddress = args.deliveryAddress;
   if (args.referralCode) payload.referralCode = args.referralCode;
+  // Order-level fields stay order-level either way.
+  if (args.customerNotes) payload.customerNotes = args.customerNotes;
+  if (grouped) {
+    // A single line's shape belongs on its line, not on the order.
+    return payload;
+  }
   if (args.designFileUrl) {
     payload.designFileUrl = args.designFileUrl;
     if (args.designFilePublicId) payload.designFilePublicId = args.designFilePublicId;
   }
-  if (args.customerNotes) payload.customerNotes = args.customerNotes;
   if (args.serviceType) {
     payload.serviceType = args.serviceType;
     if (args.selectedOptions && Object.keys(args.selectedOptions).length > 0) {
