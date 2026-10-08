@@ -50,6 +50,34 @@ export interface OptionField {
   min?: number;
   max?: number;
   maxLength?: number;
+  /** "Show only when" — the sibling field this one waits on, and the answers. */
+  showIf?: { key: string; in: string[] };
+}
+
+/**
+ * Is this field asked, given the answers so far? Mirrors the server's
+ * `isFieldVisible`, which is the authority: the server ignores a hidden field
+ * entirely — not required, not validated — so the form must not show one either.
+ *
+ * A field whose decisive answer is missing is NOT asked: nothing has been chosen
+ * yet, so nothing depends on it.
+ */
+export function isFieldVisible(
+  field: { showIf?: { key: string; in: string[] } },
+  selected: Record<string, unknown> | undefined,
+): boolean {
+  if (!field.showIf) return true;
+  const raw = selected?.[field.showIf.key];
+  if (raw === undefined || raw === null) return false;
+  return field.showIf.in.includes(String(raw).trim());
+}
+
+/** The fields a customer is actually asked, in order. */
+export function visibleOptionFields(
+  fields: OptionField[] | null | undefined,
+  selected: Record<string, unknown> | undefined,
+): OptionField[] {
+  return (fields ?? []).filter((f) => isFieldVisible(f, selected));
 }
 
 /** Normalize mixed string/object choices to `{ value, image? }`. */
@@ -84,7 +112,9 @@ export function missingRequiredOptionFields(
   values: Record<string, string>,
 ): string[] {
   if (!fields) return [];
-  return fields
+  // Only what is ASKED can be missing: a hidden field demanded here would block
+  // "Single cake" on an unanswered "How many tiers?" the customer cannot see.
+  return visibleOptionFields(fields, values)
     .filter((f) => f.required && !(values[f.key] ?? '').trim())
     .map((f) => f.label);
 }
@@ -109,7 +139,8 @@ export function validateOptionValues(
   values: Record<string, string>,
 ): OptionValuesValidation {
   const errors: Record<string, string> = {};
-  for (const field of fields ?? []) {
+  // A hidden field is not asked, so it is not validated.
+  for (const field of visibleOptionFields(fields, values)) {
     const text = (values[field.key] ?? "").trim();
     if (!text) {
       if (field.required) errors[field.key] = `${field.label} is required`;
@@ -151,6 +182,14 @@ export function validateOptionValues(
  * One line naming what is wrong, for a banner: the first two problems, so a
  * customer with three empty fields is not read a paragraph.
  */
+/** The fields to RENDER: the visible ones. */
+export function renderableOptionFields(
+  fields: OptionField[] | null | undefined,
+  values: Record<string, string>,
+): OptionField[] {
+  return visibleOptionFields(fields, values);
+}
+
 export function summarizeOptionErrors(errors: Record<string, string>): string | null {
   const messages = Object.values(errors).filter(Boolean);
   if (messages.length === 0) return null;

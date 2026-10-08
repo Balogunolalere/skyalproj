@@ -1,6 +1,7 @@
 "use client";
 
 import { normalizeChoices, type OptionField, type ServiceOptionShape } from "@/lib/order";
+import { visibleOptionFields } from '@/lib/order';
 import { PRINT_FONTS, fontStack, previewTextFor } from "@/lib/print-fonts";
 
 /**
@@ -35,7 +36,12 @@ export function OptionFieldsBlock({
   /** Per-field problems from `validateOptionValues`, shown under each input. */
   errors?: Record<string, string>;
 }) {
-  const fields = Array.isArray(service.optionFields) ? service.optionFields : [];
+  // Only what the customer is ASKED. A conditional field that is hidden here is
+  // ignored by the server too, so the two agree about what was asked.
+  const fields = visibleOptionFields(
+    Array.isArray(service.optionFields) ? service.optionFields : [],
+    values,
+  );
   if (fields.length > 0) {
     // What a font preview should render: the text the customer has typed into
     // this service's message field, or a sample until they type.

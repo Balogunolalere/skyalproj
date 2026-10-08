@@ -9,6 +9,8 @@ import {
   pickupTierPct,
   pickupDateBounds,
   missingRequiredOptionFields,
+  visibleOptionFields,
+  validateOptionValues,
   normalizeChoices,
   buildQuotePayload,
   buildOrderPayload,
@@ -335,6 +337,50 @@ describe('buildQuotePayload', () => {
     expect('selectedOptions' in payload).toBe(false);
   })
 })
+
+describe('conditional fields — "show only when"', () => {
+  /*
+   * The server is the authority: a field whose condition is not met was never
+   * asked, so it is NOT required and NOT validated. The form has to agree, or a
+   * customer who picks "Single cake" is blocked by an empty "How many tiers?"
+   * that is not even on screen.
+   */
+  const FIELDS: OptionField[] = [
+    { key: 'cake_type', label: 'Type of cake', type: 'dropdown', choices: ['Single', 'Tiered'], required: true },
+    { key: 'tiers', label: 'How many tiers?', type: 'number', min: 1, max: 8, required: true,
+      showIf: { key: 'cake_type', in: ['Tiered'] } },
+  ];
+
+  test('asks the conditional field only for the answers it lists', () => {
+    expect(visibleOptionFields(FIELDS, { cake_type: 'Tiered' }).map((f) => f.key)).toEqual(['cake_type', 'tiers']);
+    expect(visibleOptionFields(FIELDS, { cake_type: 'Single' }).map((f) => f.key)).toEqual(['cake_type']);
+  });
+
+  test('does not ask it before the deciding answer is given', () => {
+    expect(visibleOptionFields(FIELDS, {}).map((f) => f.key)).toEqual(['cake_type']);
+  });
+
+  test('a Single cake is not asked for tiers', () => {
+    expect(missingRequiredOptionFields(FIELDS, { cake_type: 'Single' })).toEqual([]);
+  });
+
+  test('a Tiered cake IS', () => {
+    expect(missingRequiredOptionFields(FIELDS, { cake_type: 'Tiered' })).toEqual(['How many tiers?']);
+  });
+
+  test('validation ignores a hidden field rather than refusing it', () => {
+    // A stale value from a form the customer backtracked through must not fail
+    // the order with "must be one of the listed options" for a field never shown.
+    const r = validateOptionValues(FIELDS, { cake_type: 'Single', tiers: '99' });
+    expect(r.valid).toBe(true);
+  });
+
+  test('validation still checks the field once it IS asked', () => {
+    const r = validateOptionValues(FIELDS, { cake_type: 'Tiered', tiers: '99' });
+    expect(r.valid).toBe(false);
+    expect(r.errors.tiers).toMatch(/at most 8/i);
+  });
+});
 
 describe('buildOrderPayload', () => {
   test('catalog path: requestedPickupTime + selectedOptions in the order payload', () => {
