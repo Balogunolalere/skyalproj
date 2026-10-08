@@ -49,6 +49,8 @@ interface ExtraItem {
   customSpec?: { description: string; material?: string; dimensions?: string; complexity: string };
   /** What the customer reads in the basket and on the review step. */
   serviceLabel: string;
+  /** What the customer calls this piece — "Cake 1". Lines sharing one are one cake. */
+  groupLabel?: string;
   quantity: number;
   selectedVariant: string;
   selectedOptions: Record<string, string>;
@@ -60,6 +62,7 @@ interface ExtraItem {
 /** One set-aside line as the API expects it. */
 function extraItemToLine(item: ExtraItem): OrderItemPayloadArgs {
   return {
+    ...(item.groupLabel?.trim() ? { groupLabel: item.groupLabel.trim() } : {}),
     ...(item.serviceType ? { serviceType: item.serviceType } : {}),
     ...(item.customSpec ? { customSpec: item.customSpec } : {}),
     quantity: item.quantity,
@@ -248,6 +251,11 @@ export default function OrderView({
    * and files; pickup, delivery and contact details stay order-level.
    */
   const [extraItems, setExtraItems] = useState<ExtraItem[]>([]);
+  /**
+   * What the customer calls the line being configured. Only meaningful once the
+   * order has more than one line — a lone line is already one piece.
+   */
+  const [currentGroupLabel, setCurrentGroupLabel] = useState("");
   const [customDescription, setCustomDescription] = useState("");
   const [customMaterial, setCustomMaterial] = useState("");
   const [customDimensions, setCustomDimensions] = useState("");
@@ -549,6 +557,9 @@ export default function OrderView({
                         ? [
                             customMode
                               ? {
+                                  ...(currentGroupLabel.trim()
+                                    ? { groupLabel: currentGroupLabel.trim() }
+                                    : {}),
                                   customSpec: {
                                     description: customDescription.trim(),
                                     material: customMaterial.trim() || undefined,
@@ -558,6 +569,9 @@ export default function OrderView({
                                   quantity: qty,
                                 }
                               : {
+                                  ...(currentGroupLabel.trim()
+                                    ? { groupLabel: currentGroupLabel.trim() }
+                                    : {}),
                                   serviceType,
                                   quantity: qty,
                                   selectedVariant: selectedVariant || undefined,
@@ -639,6 +653,9 @@ export default function OrderView({
   usePreviewFonts((service?.optionFields ?? []).some((f) => f.type === "font"));
   const pickupValid = !!requestedPickupTime && isValidPickupISO(requestedPickupTime, Date.now(), cal);
   const phoneValid = isValidNigerianPhone(phone);
+
+  /** What the customer sees for the line being configured. */
+  const currentItemLabel = customMode ? customDescription.trim() : service?.label ?? "";
 
   const canNext =
     (step === 0 && (customMode || !!serviceType)) ||
@@ -854,6 +871,7 @@ export default function OrderView({
                           Object.keys(selectedOptions).length > 0 ? selectedOptions : undefined,
                       }),
                   quantity: qty,
+                  ...(currentGroupLabel.trim() ? { groupLabel: currentGroupLabel.trim() } : {}),
                   ...(designFileUrl ? { designFileUrl, designFilePublicId } : {}),
                 },
               ],
@@ -1126,6 +1144,26 @@ export default function OrderView({
               <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread mb-3">
                 In this order ({extraItems.length + (serviceType ? 1 : 0)})
               </div>
+              {/* The piece being configured belongs to the order too, so it can
+                  carry the same name as the lines it goes with. */}
+              {(service || currentItemLabel) && (
+                <div className="mb-3 border-b border-ink/10 pb-3">
+                  <div className="text-sm text-ink">
+                    {currentItemLabel || service?.label}{" "}
+                    <span className="font-mono text-thread tnum">×{qty}</span>
+                    <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-thread/60">editing</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={currentGroupLabel}
+                    maxLength={60}
+                    placeholder="Name this piece (e.g. Cake 1)"
+                    aria-label="Name for the piece you are editing"
+                    onChange={(e) => setCurrentGroupLabel(e.target.value)}
+                    className="mt-1.5 w-full max-w-[240px] border border-ink/15 bg-white px-2 py-1 text-xs text-ink"
+                  />
+                </div>
+              )}
               <ul className="space-y-2.5">
                 {extraItems.map((item, i) => (
                   <li key={i} className="flex items-start justify-between gap-3 text-sm">
@@ -1146,6 +1184,21 @@ export default function OrderView({
                           {item.files.length} file{item.files.length > 1 ? "s" : ""}
                         </div>
                       )}
+                      {/* Name the piece so the workshop knows two lines are ONE
+                          cake — the customer already talks this way. */}
+                      <input
+                        type="text"
+                        value={item.groupLabel ?? ""}
+                        maxLength={60}
+                        placeholder="Name this piece (e.g. Cake 1)"
+                        aria-label={`Name for ${item.serviceLabel}`}
+                        onChange={(e) =>
+                          setExtraItems((prev) =>
+                            prev.map((it, ii) => (ii === i ? { ...it, groupLabel: e.target.value } : it)),
+                          )
+                        }
+                        className="mt-1.5 w-full max-w-[240px] border border-ink/15 bg-white px-2 py-1 text-xs text-ink"
+                      />
                     </div>
                     <button
                       onClick={() => removeExtraItem(i)}

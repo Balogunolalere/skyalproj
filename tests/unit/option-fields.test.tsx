@@ -198,7 +198,7 @@ describe('OptionFieldsBlock — a calculated field', () => {
   });
 
   test('shows a placeholder, not a wrong number, before both inputs are filled', () => {
-    for (const values of [{}, { Layers: '3' }, { Layer_Inches: '2' }]) {
+    for (const values of [{}, { Layers: '3' }, { Layer_Inches: '2' }] as Record<string, string>[]) {
       const html = render(values);
       expect(html).toContain('data-testid="computed-Height_Inches"');
       expect(html).toContain('Fill in the fields above');
