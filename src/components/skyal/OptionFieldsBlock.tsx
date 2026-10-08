@@ -1,7 +1,7 @@
 "use client";
 
 import { normalizeChoices, type OptionField, type ServiceOptionShape } from "@/lib/order";
-import { visibleOptionFields } from '@/lib/order';
+import { derivedValue, visibleOptionFields } from '@/lib/order';
 import { PRINT_FONTS, fontStack, previewTextFor } from "@/lib/print-fonts";
 
 /**
@@ -56,6 +56,7 @@ export function OptionFieldsBlock({
             onChange={(v) => onChange({ ...values, [field.key]: v })}
             error={errors?.[field.key]}
             previewText={previewText}
+            values={values}
           />
         ))}
       </div>
@@ -95,6 +96,7 @@ function OptionFieldInput({
   onChange,
   error,
   previewText,
+  values,
 }: {
   field: OptionField;
   value: string;
@@ -102,6 +104,8 @@ function OptionFieldInput({
   error?: string;
   /** Text the font preview renders (the customer's message, or a sample). */
   previewText?: string;
+  /** All answers so far — a derived field multiplies two of them. */
+  values?: Record<string, string>;
 }) {
   const errorLine = error ? (
     <p role="alert" className="text-xs text-oxblood mt-1.5">
@@ -278,6 +282,30 @@ function OptionFieldInput({
         </div>
       );
     case "number":
+      // A field the admin marked as DERIVED is shown, never asked: the customer
+      // reads the number their answers work out to.
+      if (field.compute) {
+        const derived = derivedValue(field, values ?? {});
+        return (
+          <div>
+            <span className={labelClass}>{field.label}</span>
+            <div
+              data-testid={`computed-${field.key}`}
+              className={`${inputClass} flex items-center justify-between text-thread`}
+            >
+              <span>{derived === null ? "—" : derived}</span>
+              <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-thread/60">
+                calculated
+              </span>
+            </div>
+            <p className="mt-1.5 text-xs text-thread/70">
+              {derived === null
+                ? "Fill in the fields above to see this."
+                : "Worked out from your answers above — no need to enter it."}
+            </p>
+          </div>
+        );
+      }
       return (
         <div>
           {fieldLabel}
@@ -288,6 +316,9 @@ function OptionFieldInput({
             required={field.required}
             min={field.min}
             max={field.max}
+            // 0.01 when decimals are allowed, so 1.5 is accepted rather than
+            // rejected as "not a whole number" by the browser.
+            step={field.decimals ? 0.01 : 1}
             aria-invalid={!!error}
             onChange={(e) => onChange(e.target.value)}
             className={`${inputClass}${error ? " border-oxblood" : ""}`}

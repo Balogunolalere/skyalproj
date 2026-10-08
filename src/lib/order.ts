@@ -50,19 +50,22 @@ export interface OptionField {
   min?: number;
   max?: number;
   maxLength?: number;
+  /** number only — allow a decimal (layer thicknesses are 1.5in). */
+  decimals?: boolean;
+  /** NUMBER only — price steps ("up to 8 → +₦0"). Priced by the server. */
+  bands?: { upTo: number; priceDelta?: number }[];
+  /** Set when this value is DERIVED from two other number fields, not asked. */
+  compute?: { multiply: [string, string] };
   /** "Show only when" — the sibling field this one waits on, and the answers. */
   showIf?: { key: string; in: string[] };
 }
 
 /**
- * Is this field asked, given the answers so far? Mirrors the server's
- * `isFieldVisible`, which is the authority: the server ignores a hidden field
- * entirely — not required, not validated — so the form must not show one either.
- *
- * A field whose decisive answer is missing is NOT asked: nothing has been chosen
- * yet, so nothing depends on it.
+ * Is this field SHOWN, given the answers so far? Mirrors the server's
+ * `isFieldConditionMet` — a field whose decisive answer is missing is not shown:
+ * nothing has been chosen yet, so nothing depends on it.
  */
-export function isFieldVisible(
+export function isFieldShown(
   field: { showIf?: { key: string; in: string[] } },
   selected: Record<string, unknown> | undefined,
 ): boolean {
@@ -72,12 +75,47 @@ export function isFieldVisible(
   return field.showIf.in.includes(String(raw).trim());
 }
 
-/** The fields a customer is actually asked, in order. */
+/**
+ * Is this field ASKED? Mirrors the server, which is the authority: it ignores a
+ * hidden field entirely — not required, not validated — so the form must not ask
+ * for one either.
+ *
+ * A DERIVED field is never asked: it is SHOWN so the customer can read the number
+ * (the designer needs the height). Rendering uses `isFieldShown`, validation uses
+ * this, and the difference is exactly that.
+ */
+export function isFieldVisible(
+  field: { showIf?: { key: string; in: string[] }; compute?: unknown },
+  selected: Record<string, unknown> | undefined,
+): boolean {
+  if (field.compute) return false;
+  return isFieldShown(field, selected);
+}
+
+/**
+ * The fields to RENDER, in order — derived ones included, because the customer
+ * should see the height their order works out to.
+ */
 export function visibleOptionFields(
   fields: OptionField[] | null | undefined,
   selected: Record<string, unknown> | undefined,
 ): OptionField[] {
-  return (fields ?? []).filter((f) => isFieldVisible(f, selected));
+  return (fields ?? []).filter((f) => isFieldShown(f, selected));
+}
+
+/**
+ * The product a derived field stands for, or null until both its inputs are
+ * known. Same arithmetic as the server, so the number shown is the number stored.
+ */
+export function derivedValue(
+  field: { compute?: { multiply: [string, string] } },
+  values: Record<string, string | number> | undefined,
+): number | null {
+  if (!field.compute) return null;
+  const a = Number(values?.[field.compute.multiply[0]]);
+  const b = Number(values?.[field.compute.multiply[1]]);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return Math.round(a * b * 100) / 100;
 }
 
 /** Normalize mixed string/object choices to `{ value, image? }`. */
@@ -114,7 +152,9 @@ export function missingRequiredOptionFields(
   if (!fields) return [];
   // Only what is ASKED can be missing: a hidden field demanded here would block
   // "Single cake" on an unanswered "How many tiers?" the customer cannot see.
-  return visibleOptionFields(fields, values)
+  // `isFieldVisible` excludes derived fields, which nobody can fill in.
+  return (fields ?? [])
+    .filter((f) => isFieldVisible(f, values))
     .filter((f) => f.required && !(values[f.key] ?? '').trim())
     .map((f) => f.label);
 }
@@ -139,8 +179,10 @@ export function validateOptionValues(
   values: Record<string, string>,
 ): OptionValuesValidation {
   const errors: Record<string, string> = {};
-  // A hidden field is not asked, so it is not validated.
+  // A hidden field is not asked, so it is not validated — and neither is a
+  // DERIVED one, which has no input for anyone to get wrong.
   for (const field of visibleOptionFields(fields, values)) {
+    if (field.compute) continue;
     const text = (values[field.key] ?? "").trim();
     if (!text) {
       if (field.required) errors[field.key] = `${field.label} is required`;
@@ -148,9 +190,12 @@ export function validateOptionValues(
     }
     if (field.type === "number") {
       const n = Number(text);
-      // The backend demands a WHOLE number (`Number.isInteger`), not merely a
-      // finite one — "2.5" is rejected there, so it must not pass here.
-      if (!Number.isInteger(n)) errors[field.key] = `${field.label} must be a whole number`;
+      // Whole numbers unless the admin allowed decimals (a layer thickness is
+      // 1.5in). Mirrors the backend, which rounds to 2 places.
+      const ok = field.decimals ? Number.isFinite(n) : Number.isInteger(n);
+      if (!ok) errors[field.key] = field.decimals
+        ? `${field.label} must be a number`
+        : `${field.label} must be a whole number`;
       else if (typeof field.min === "number" && n < field.min)
         errors[field.key] = `${field.label} must be at least ${field.min}`;
       else if (typeof field.max === "number" && n > field.max)

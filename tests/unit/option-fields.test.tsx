@@ -160,3 +160,75 @@ describe('OptionFieldsBlock — Acrylic Cake Topper (Skyal) from the catalog fix
     expect(html).toContain('max="100"');
   });
 });
+
+/**
+ * A DERIVED field — "the height the designer needs".
+ *
+ * The owner's arithmetic: "my layer is 1.5, and I have 3 layers, so 1.5 × 3 —
+ * this is the height they are working with". The customer never types it, so the
+ * block must SHOW it and must NOT render an input for it.
+ */
+describe('OptionFieldsBlock — a calculated field', () => {
+  const FIELDS: OptionField[] = [
+    { key: 'Layers', label: 'Layers', type: 'number', min: 1, max: 8, required: true },
+    { key: 'Layer_Inches', label: 'Thickness', type: 'number', min: 1, max: 4, required: true, decimals: true },
+    { key: 'Height_Inches', label: 'Total height (in)', type: 'number', compute: { multiply: ['Layers', 'Layer_Inches'] } },
+  ];
+  const render = (values: Record<string, string>) =>
+    renderToStaticMarkup(
+      <OptionFieldsBlock
+        service={{ optionFields: FIELDS } as never}
+        values={values}
+        onChange={() => {}}
+        variant=""
+        onVariantChange={() => {}}
+      />,
+    );
+
+  test('shows the calculated value once both inputs are known', () => {
+    const html = render({ Layers: '3', Layer_Inches: '1.5' });
+    expect(html).toContain('data-testid="computed-Height_Inches"');
+    expect(html).toContain('4.5');           // the owner's own example
+    expect(html).toContain('calculated');
+  });
+
+  test('renders NO input for it — the customer cannot type into it', () => {
+    const html = render({ Layers: '3', Layer_Inches: '1.5' });
+    expect(html).not.toContain('id="option-Height_Inches"');
+  });
+
+  test('shows a placeholder, not a wrong number, before both inputs are filled', () => {
+    for (const values of [{}, { Layers: '3' }, { Layer_Inches: '2' }]) {
+      const html = render(values);
+      expect(html).toContain('data-testid="computed-Height_Inches"');
+      expect(html).toContain('Fill in the fields above');
+      expect(html).not.toContain('4.5');
+    }
+  });
+
+  test('recomputes as the customer changes an input', () => {
+    expect(render({ Layers: '2', Layer_Inches: '2' })).toContain('4');
+    expect(render({ Layers: '3', Layer_Inches: '3' })).toContain('9');
+  });
+
+  test('does not mark it required, however the admin set it', () => {
+    const html = renderToStaticMarkup(
+      <OptionFieldsBlock
+        service={{ optionFields: [{ ...FIELDS[2], required: true }] } as never}
+        values={{ Layers: '2', Layer_Inches: '2' }}
+        onChange={() => {}}
+        variant=""
+        onVariantChange={() => {}}
+      />,
+    );
+    expect(html).toContain('calculated');
+    expect(html).not.toContain('*');
+  });
+
+  test('carries decimals so 1.5in is accepted', () => {
+    const html = render({});
+    expect(html).toMatch(/id="option-Layer_Inches"[^>]*step="0\.01"/);
+    // the whole-number field stays on whole numbers
+    expect(html).toMatch(/id="option-Layers"[^>]*step="1"/);
+  });
+});
