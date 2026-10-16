@@ -15,6 +15,7 @@ import {
 } from "@/lib/order";
 import { OptionFieldsBlock, RequiredOptionsHint } from "../OptionFieldsBlock";
 import { PickupDateTimePicker } from "../PickupDateTimePicker";
+import { groupServices } from "@/lib/service-groups";
 import {
   type BusinessCalendar,
   DEFAULT_BUSINESS_CALENDAR,
@@ -267,10 +268,14 @@ export default function CalculatorView({
                   }}
                   className="w-full bg-bone border border-hairline px-4 py-3 text-sm text-ink focus:border-laser outline-none"
                 >
-                  {services.map((s) => (
-                    <option key={s.id} value={s.type}>
-                      {s.label} — {formatNaira(s.basePriceNaira)}/{s.unit || "unit"}
-                    </option>
+                  {groupServices(services).map((group) => (
+                    <optgroup key={group.category} label={group.label}>
+                      {group.services.map((s) => (
+                        <option key={s.id} value={s.type}>
+                          {s.label} — {formatNaira(s.basePriceNaira)}/{s.unit || "unit"}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
               )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { apiFetch, ApiError } from "@/lib/api";
+import { groupServices } from "@/lib/service-groups";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
@@ -610,15 +611,15 @@ export default function OrderView({
     };
   }, [serviceType, qty, sla, delivery, referral, service, step, delivOption, address, requestedPickupTime, selectedVariant, selectedOptions, extraItems]);
 
-  /* ── Group services by category for the picker ── */
-  const servicesByCategory = useMemo(() => {
-    const m = new Map<string, Service[]>();
-    for (const s of services) {
-      if (!m.has(s.category)) m.set(s.category, []);
-      m.get(s.category)!.push(s);
-    }
-    return Array.from(m.entries());
-  }, [services]);
+  /* ── Group services by category for the picker ──
+       Ordered in ONE place (see service-groups.ts) so this list and the
+       calculator's dropdown can never disagree: categories alphabetical,
+       services alphabetical within each. The API's own order put "Full Buba"
+       above "Bottom of Wrapper" and mixed the categories together. */
+  const servicesByCategory = useMemo(
+    () => groupServices(services).map((g) => [g.category, g.services] as [string, Service[]]),
+    [services],
+  );
 
   /* ── Fallback estimate (used when the quote API hasn't replied yet).
        Mirrors the engine's tiered express ladder from the pickup time — the
