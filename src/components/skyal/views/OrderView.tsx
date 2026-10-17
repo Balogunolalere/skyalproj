@@ -1,6 +1,7 @@
 "use client";
 
 import { apiFetch, ApiError } from "@/lib/api";
+import { noteList } from "@/lib/quote-notes";
 import { groupServices } from "@/lib/service-groups";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { formatNaira, type ViewId } from "../data";
@@ -104,6 +105,8 @@ interface QuoteBreakdown {
   basePrice?: number;
   subtotal?: number;
   expressSurcharge?: number;
+  /** The engine's explanation of the price. */
+  notes?: string[] | string;
   addOnsTotal?: number;
   discount?: number;
   deliveryFee?: number;
@@ -1909,6 +1912,20 @@ export default function OrderView({
                   <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.14em] text-bone/60">
                     lead time · {quote.breakdown.leadTime}
                   </div>
+                )}
+                {/* Why the total is what it is. A minimum-charge order shows a
+                    total that does not match its own lines ("Custom Fabric
+                    Cutting": ₦10,000 of lines, ₦20,000 to pay) and the engine's
+                    explanation was being dropped on the floor. */}
+                {noteList(quote?.breakdown?.notes).length > 0 && (
+                  <ul className="mt-4 pt-4 border-t border-bone/20 space-y-1.5" data-testid="quote-notes">
+                    {noteList(quote?.breakdown?.notes).map((note) => (
+                      <li key={note} className="text-xs text-bone/70 leading-relaxed flex gap-2">
+                        <span className="text-laser" aria-hidden="true">·</span>
+                        <span>{note}</span>
+                      </li>
+                    ))}
+                  </ul>
                 )}
                 {quote?.availability && (
                   <div className="mt-4 pt-4 border-t border-bone/20">

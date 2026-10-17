@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
+import { noteList } from "@/lib/quote-notes";
 import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { ArrowRight, Loader2, AlertCircle } from "lucide-react";
@@ -57,6 +58,12 @@ interface QuoteBreakdown {
   sla?: string;
   leadTime?: string;
   quantity?: number;
+  /**
+   * The engine's own explanation of the price — why a minimum was applied, that
+   * production starts at the next opening, that the customer supplies material.
+   * An ARRAY (it was untyped here, so nothing could ever read it).
+   */
+  notes?: string[] | string;
   [k: string]: unknown;
 }
 
@@ -512,6 +519,21 @@ export default function CalculatorView({
                     </span>
                   </div>
                 ))}
+
+                {/* The engine's own explanation of the price. Without it a
+                    minimum-charge order reads as a total that does not match its
+                    lines: "Custom Fabric Cutting" is ₦10,000 but bills ₦20,000,
+                    and nothing on the page said why. */}
+                {noteList(breakdown?.notes).length > 0 && (
+                  <ul className="pt-3 space-y-1.5 border-t border-hairline" data-testid="quote-notes">
+                    {noteList(breakdown?.notes).map((note) => (
+                      <li key={note} className="text-xs text-thread leading-relaxed flex gap-2">
+                        <span className="text-laser" aria-hidden="true">·</span>
+                        <span>{note}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
               <div className="w-full h-px bg-hairline my-5" />
