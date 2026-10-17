@@ -524,6 +524,19 @@ export default function CalculatorView({
                     minimum-charge order reads as a total that does not match its
                     lines: "Custom Fabric Cutting" is ₦10,000 but bills ₦20,000,
                     and nothing on the page said why. */}
+                {requestedPickupTime && (
+                  <p className="pt-3 text-xs text-thread/70" data-testid="assumed-pickup">
+                    Estimated for the pickup you selected:{' '}
+                    <span className="text-thread">
+                      {new Date(requestedPickupTime).toLocaleString('en-NG', {
+                        weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', hour12: false,
+                        timeZone: 'Africa/Lagos',
+                      })}
+                    </span>
+                    . A sooner pickup costs more.
+                  </p>
+                )}
+
                 {noteList(breakdown?.notes).length > 0 && (
                   <ul className="pt-3 space-y-1.5 border-t border-hairline" data-testid="quote-notes">
                     {noteList(breakdown?.notes).map((note) => (
