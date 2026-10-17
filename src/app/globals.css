@@ -317,59 +317,74 @@
 }
 
 /* ---------------------------------------------------------------- print fonts
-   The real typefaces for the customer font picker. Each stack in
-   src/lib/print-fonts.ts lists the real family FIRST and a free fallback after
-   it, so uncommenting one of these switches that font from "approximate" to
-   exact. See public/fonts/README.md for the filenames and the licensing note.
+   The real typefaces for the customer font picker, self-hosted so a preview is
+   EXACT rather than an approximation. The customer sees "FONT A"; the real face
+   each label stands for is `ownerSpelling` in src/lib/print-fonts.ts and is shown
+   to the operator on the order, never to the customer.
 
+   Each entry in src/lib/print-fonts.ts already lists its family FIRST, so these
+   win over the free Google fallback that follows in the stack — and if a file
+   ever fails to load, the fallback still renders a script instead of the site
+   font.
+
+   ⚠ LICENSING: most of these faces are commercial desktop fonts — several say
+   "personal use only" or are Microsoft-supplied — and a desktop licence does not
+   include the right to embed them in a website. Serving these files from a public
+   URL is web embedding. This was a deliberate decision by the owner; see
+   public/fonts/README.md. */
 @font-face {
-  font-family: "Samantha Upright PRO W05";
-  src: url("/fonts/SamanthaUprightPROW05.woff2") format("woff2");
+  font-family: "FontA";
+  src: url("/fonts/FontA.woff2") format("woff2");
   font-display: swap;
 }
 @font-face {
-  font-family: "Style Script";
-  src: url("/fonts/StyleScript.woff2") format("woff2");
+  font-family: "FontB";
+  src: url("/fonts/FontB.woff2") format("woff2");
   font-display: swap;
 }
 @font-face {
-  font-family: "Lavanderia Sturdy";
-  src: url("/fonts/LavanderiaSturdy.woff2") format("woff2");
+  font-family: "FontC";
+  src: url("/fonts/FontC.woff2") format("woff2");
   font-display: swap;
 }
 @font-face {
-  font-family: "Athena of the Ocean";
-  src: url("/fonts/AthenaOfTheOcean.woff2") format("woff2");
+  font-family: "FontD";
+  src: url("/fonts/FontD.woff2") format("woff2");
   font-display: swap;
 }
 @font-face {
-  font-family: "Amarillo";
-  src: url("/fonts/Amarillo.woff2") format("woff2");
+  font-family: "FontE";
+  src: url("/fonts/FontE.woff2") format("woff2");
   font-display: swap;
 }
 @font-face {
-  font-family: "Sunshine";
-  src: url("/fonts/Sunshine.woff2") format("woff2");
+  font-family: "FontF";
+  src: url("/fonts/FontF.woff2") format("woff2");
   font-display: swap;
 }
 @font-face {
-  font-family: "White Dream";
-  src: url("/fonts/WhiteDream.woff2") format("woff2");
+  font-family: "FontG";
+  src: url("/fonts/FontG.woff2") format("woff2");
   font-display: swap;
 }
 @font-face {
-  font-family: "Gabriola";
-  src: url("/fonts/Gabriola.woff2") format("woff2");
+  font-family: "FontH";
+  src: url("/fonts/FontH.woff2") format("woff2");
   font-display: swap;
 }
 @font-face {
-  font-family: "Clarendon";
-  src: url("/fonts/Clarendon.woff2") format("woff2");
+  font-family: "FontI";
+  src: url("/fonts/FontI.woff2") format("woff2");
   font-display: swap;
 }
 @font-face {
-  font-family: "Baby Valentina";
-  src: url("/fonts/BabyValentina.woff2") format("woff2");
+  font-family: "FontJ";
+  src: url("/fonts/FontJ.woff2") format("woff2");
   font-display: swap;
 }
-------------------------------------------------------------------------------- */
+@font-face {
+  font-family: "FontK";
+  src: url("/fonts/FontK.woff2") format("woff2");
+  font-display: swap;
+}
+

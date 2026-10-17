@@ -19,6 +19,12 @@
 export interface PrintFont {
   /** Canonical name: what the customer picks and the order records. */
   name: string;
+  /**
+   * The real typeface this label stands for — the operator's reference. The
+   * customer picks "FONT A"; whoever loads the file in the laser software needs
+   * to know that means Amarillo. Shown on the order, never to the customer.
+   */
+  ownerSpelling?: string;
   /** Expected file in `public/fonts/` for an exact preview. */
   file: string;
   /** CSS `font-family` stack: the real face first, free fallbacks after. */
@@ -26,50 +32,31 @@ export interface PrintFont {
 }
 
 export const PRINT_FONTS: PrintFont[] = [
-  {
-    name: 'Samantha Upright PRO W05',
-    file: 'SamanthaUprightPROW05.woff2',
-    styles: "'Samantha Upright PRO W05', 'Great Vibes', cursive",
-  },
-  { name: 'Style Script', file: 'StyleScript.woff2', styles: "'Style Script', cursive" },
-  {
-    name: 'Lavanderia Sturdy',
-    file: 'LavanderiaSturdy.woff2',
-    styles: "'Lavanderia Sturdy', 'Yellowtail', cursive",
-  },
-  {
-    name: 'Athena of the Ocean',
-    file: 'AthenaOfTheOcean.woff2',
-    styles: "'Athena of the Ocean', 'Alex Brush', cursive",
-  },
-  { name: 'Amarillo', file: 'Amarillo.woff2', styles: "'Amarillo', 'Allura', cursive" },
-  { name: 'Sunshine', file: 'Sunshine.woff2', styles: "'Sunshine', 'Courgette', cursive" },
-  {
-    name: 'White Dream',
-    file: 'WhiteDream.woff2',
-    styles: "'White Dream', 'Parisienne', cursive",
-  },
-  { name: 'Gabriola', file: 'Gabriola.woff2', styles: "'Gabriola', 'Cormorant Garamond', serif" },
-  { name: 'Clarendon', file: 'Clarendon.woff2', styles: "'Clarendon', 'Besley', serif" },
-  {
-    name: 'Baby Valentina',
-    file: 'BabyValentina.woff2',
-    styles: "'Baby Valentina', 'Kaushan Script', cursive",
-  },
+  { name: 'FONT A', ownerSpelling: 'Amarillo', file: 'FontA.woff2', styles: "'FontA', 'Allura', cursive" },
+  { name: 'FONT B', ownerSpelling: 'Amarylli Blossom', file: 'FontB.woff2', styles: "'FontB', 'Great Vibes', cursive" },
+  { name: 'FONT C', ownerSpelling: 'Athena of the Ocean', file: 'FontC.woff2', styles: "'FontC', 'Alex Brush', cursive" },
+  { name: 'FONT D', ownerSpelling: 'Baby Valentina', file: 'FontD.woff2', styles: "'FontD', 'Kaushan Script', cursive" },
+  { name: 'FONT E', ownerSpelling: 'Clarendon', file: 'FontE.woff2', styles: "'FontE', 'Besley', serif" },
+  { name: 'FONT F', ownerSpelling: 'Gabriola', file: 'FontF.woff2', styles: "'FontF', 'Cormorant Garamond', serif" },
+  { name: 'FONT G', ownerSpelling: 'Lavanderia Sturdy', file: 'FontG.woff2', styles: "'FontG', 'Yellowtail', cursive" },
+  { name: 'FONT H', ownerSpelling: 'Samantha Upright', file: 'FontH.woff2', styles: "'FontH', 'Great Vibes', cursive" },
+  { name: 'FONT I', ownerSpelling: 'Style Script', file: 'FontI.woff2', styles: "'FontI', 'Style Script', cursive" },
+  { name: 'FONT J', ownerSpelling: 'Sunshine', file: 'FontJ.woff2', styles: "'FontJ', 'Courgette', cursive" },
+  { name: 'FONT K', ownerSpelling: 'White Dream', file: 'FontK.woff2', styles: "'FontK', 'Parisienne', cursive" },
 ];
 
 /** Free families used in the preview until the real files are supplied. */
 export const PREVIEW_FALLBACK_FAMILIES: string[] = [
-  'Great Vibes',
-  'Style Script',
-  'Yellowtail',
-  'Alex Brush',
   'Allura',
+  'Great Vibes',
+  'Alex Brush',
+  'Kaushan Script',
+  'Besley',
+  'Cormorant Garamond',
+  'Yellowtail',
+  'Style Script',
   'Courgette',
   'Parisienne',
-  'Cormorant Garamond',
-  'Besley',
-  'Kaushan Script',
 ];
 
 /**

@@ -26,27 +26,21 @@ import { buildOrderPayload, validateOptionValues, type OptionField } from '@/lib
 
 /** The names the backend accepts — pinned identically in its own test. */
 const BACKEND_NAMES = [
-  'Samantha Upright PRO W05',
-  'Style Script',
-  'Lavanderia Sturdy',
-  'Athena of the Ocean',
-  'Amarillo',
-  'Sunshine',
-  'White Dream',
-  'Gabriola',
-  'Clarendon',
-  'Baby Valentina',
+  'FONT A', 'FONT B', 'FONT C', 'FONT D', 'FONT E', 'FONT F',
+  'FONT G', 'FONT H', 'FONT I', 'FONT J', 'FONT K',
 ];
 
 describe('the mirrored font list', () => {
-  it('is exactly the ten names the backend validates against', () => {
+  it('is exactly the eleven labels the backend validates against', () => {
     expect(PRINT_FONTS.map((f) => f.name)).toEqual(BACKEND_NAMES);
   });
 
-  it('leads each stack with the real family and falls back after it', () => {
+  it('leads each stack with the SELF-HOSTED family, and falls back after it', () => {
     for (const font of PRINT_FONTS) {
       const [first, ...rest] = font.styles.split(',').map((s) => s.trim());
-      expect(first.replace(/['"]/g, '')).toBe(font.name);
+      // "FONT A" loads the family declared in globals.css as "FontA" — the label
+      // is a letter, so it must not be what the stylesheet looks for.
+      expect(first.replace(/['"]/g, '')).toBe('Font' + font.name.replace(/^FONT\s*/i, ''));
       expect(rest.length).toBeGreaterThan(0);
     }
   });
@@ -57,9 +51,11 @@ describe('the mirrored font list', () => {
 });
 
 describe('fontStack', () => {
-  it('resolves a known name to its stack', () => {
-    expect(fontStack('Clarendon')).toContain('Clarendon');
-    expect(fontStack('Style Script')).toBe("'Style Script', cursive");
+  it('resolves a known label to its stack', () => {
+    // The label is a LETTER; the stack names the self-hosted family that letter
+    // stands for, so the preview is the real face and the name stays hidden.
+    expect(fontStack('FONT E')).toContain('FontE');
+    expect(fontStack('FONT I')).toBe("'FontI', 'Style Script', cursive");
   });
 
   it('inherits the site font for an unknown or empty name, rather than guessing', () => {
@@ -133,7 +129,7 @@ describe('a font field validates like a choice list', () => {
   });
 
   it('accepts a listed font', () => {
-    expect(validateOptionValues([fontField()], { fonts: 'Clarendon' }).valid).toBe(true);
+    expect(validateOptionValues([fontField()], { fonts: 'FONT E' }).valid).toBe(true);
   });
 
   it('rejects a font that is not on the list, with wording about fonts', () => {
@@ -178,17 +174,22 @@ describe('the free stand-in chosen for each font', () => {
    * A table, not a rule, because the choice is a judgement per font: these were
    * picked as the closest free equivalent to each face.
    */
+  // The label the customer picks → the free family still loaded as a safety net.
+  // The stack's FIRST family is the self-hosted one (FontA for FONT A), so an
+  // exact face wins when the file is present and a script still renders if it
+  // ever fails to load.
   const MATCHES: Array<[string, string]> = [
-    ['Samantha Upright PRO W05', 'Great Vibes'],
-    ['Style Script', 'Style Script'],
-    ['Lavanderia Sturdy', 'Yellowtail'],
-    ['Athena of the Ocean', 'Alex Brush'],
-    ['Amarillo', 'Allura'],
-    ['Sunshine', 'Courgette'],
-    ['White Dream', 'Parisienne'],
-    ['Gabriola', 'Cormorant Garamond'],
-    ['Clarendon', 'Besley'],
-    ['Baby Valentina', 'Kaushan Script'],
+    ['FONT A', 'Allura'],
+    ['FONT B', 'Great Vibes'],
+    ['FONT C', 'Alex Brush'],
+    ['FONT D', 'Kaushan Script'],
+    ['FONT E', 'Besley'],
+    ['FONT F', 'Cormorant Garamond'],
+    ['FONT G', 'Yellowtail'],
+    ['FONT H', 'Great Vibes'],
+    ['FONT I', 'Style Script'],
+    ['FONT J', 'Courgette'],
+    ['FONT K', 'Parisienne'],
   ];
 
   it('covers every font, in order', () => {
@@ -199,8 +200,7 @@ describe('the free stand-in chosen for each font', () => {
     for (const [name, match] of MATCHES) {
       const font = PRINT_FONTS.find((f) => f.name === name);
       const families = (font?.styles ?? '').split(',').map((p) => p.trim().replace(/^['"]|['"]$/g, ''));
-      expect(families[0]).toBe(name); // the real face wins when its file is present
-      // Style Script IS the free face, so it is both first and the match.
+      expect(families[0]).toBe('Font' + name.replace(/^FONT\s*/i, '')); // the real file wins when present
       expect(families).toContain(match);
     }
   });
@@ -231,7 +231,7 @@ describe('what the customer does with a required font (the backend default)', ()
   it('blocks the fill-in step until a font is chosen', () => {
     expect(validateOptionValues([servedFont], {}).valid).toBe(false);
     expect(validateOptionValues([servedFont], {}).errors.fonts).toBe('Font is required');
-    expect(validateOptionValues([servedFont], { fonts: 'Clarendon' }).valid).toBe(true);
+    expect(validateOptionValues([servedFont], { fonts: 'FONT E' }).valid).toBe(true);
   });
 
   it('blocks a font that is not on the list, whatever else is filled in', () => {
@@ -269,14 +269,14 @@ describe('the shop can add a font without a deploy', () => {
   it('falls back to the built-in list rather than rendering nothing', () => {
     setLiveFonts([]);
     expect(knownFonts()).toEqual(PRINT_FONTS);
-    expect(fontStack('Clarendon')).toContain('Clarendon');
+    expect(fontStack('FONT E')).toContain('FontE');
     setLiveFonts(null);
     expect(knownFonts()).toEqual(PRINT_FONTS);
   });
 
   it('still knows the built-in fonts after a catalogue arrives', () => {
     setLiveFonts([{ name: 'Pacifico', file: 'Pacifico.woff2', styles: "'Pacifico', cursive" }]);
-    expect(fontStack('Clarendon')).toContain('Clarendon');
+    expect(fontStack('FONT E')).toContain('FontE');
   });
 
   it('inherits the site font for a name nobody knows', () => {
