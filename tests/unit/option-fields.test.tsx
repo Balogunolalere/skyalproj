@@ -232,3 +232,46 @@ describe('OptionFieldsBlock — a calculated field', () => {
     expect(html).toMatch(/id="option-Layers"[^>]*step="1"/);
   });
 });
+
+/**
+ * The "case sensitive" hint appears under the MESSAGE only.
+ *
+ * It used to render under every free-text field, so an age or a placement note
+ * told the customer their wording would be cut into the topper. Rendered to
+ * static markup so this is the real output, not a unit-test of the predicate.
+ */
+describe('OptionFieldsBlock — the case-sensitive hint', () => {
+  const render = (fields: OptionField[]) =>
+    renderToStaticMarkup(
+      <OptionFieldsBlock
+        service={{ optionFields: fields } as never}
+        values={{}}
+        onChange={() => {}}
+        variant=""
+        onVariantChange={() => {}}
+      />,
+    );
+
+  test('appears under the message', () => {
+    const html = render([{ key: 'message', label: 'Topper Message', type: 'text', required: true }]);
+    expect(html).toContain('Case sensitive');
+  });
+
+  test('does NOT appear under an age', () => {
+    const html = render([{ key: 'Age', label: 'Age', type: 'text', required: true }]);
+    expect(html).not.toContain('Case sensitive');
+  });
+
+  test('does NOT appear under a placement note', () => {
+    const html = render([{ key: 'Placement', label: 'Where on the cake should it go?', type: 'text' }]);
+    expect(html).not.toContain('Case sensitive');
+  });
+
+  test('appears ONCE on a form that has both — the message, not the age', () => {
+    const html = render([
+      { key: 'message', label: 'Topper Message', type: 'text', required: true },
+      { key: 'Age', label: 'Age', type: 'text', required: true },
+    ]);
+    expect(html.match(/Case sensitive/g)?.length ?? 0).toBe(1);
+  });
+});

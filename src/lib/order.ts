@@ -726,3 +726,28 @@ export function buildOrderPayload(args: OrderPayloadArgs): Record<string, unknow
   if (args.customSpec) payload.customSpec = args.customSpec;
   return payload;
 }
+
+/**
+ * Is this the field whose text is reproduced verbatim on the piece?
+ *
+ * The "Case sensitive — write it exactly as you want it produced" hint is only
+ * true of the MESSAGE. It used to render under every free-text field, so an age or
+ * a placement note ("lying flat on the cake") told the customer their wording
+ * would be cut into the topper.
+ *
+ * Matches the KEY or the LABEL, deliberately. The key is authored freely in the
+ * admin — the repo's own fixtures include `{ key: 'msg', label: 'Message' }` — so
+ * a key-only rule would silently drop the warning from a service that named its
+ * field anything other than `message`. The label is what the owner actually types
+ * and is the more reliable signal of intent.
+ *
+ * Kept narrow on purpose: over-matching puts a misleading promise back on any
+ * field ("messageHistory" is not printed text), and under-matching merely omits a
+ * hint, which is the safer failure.
+ */
+const VERBATIM_KEYS = new Set(['message', 'msg', 'topper_message', 'wording', 'inscription']);
+export function isVerbatimTextField(field: { key?: string | null; label?: string | null }): boolean {
+  const key = String(field.key ?? '').trim().toLowerCase();
+  if (VERBATIM_KEYS.has(key)) return true;
+  return /\b(message|wording|inscription)\b/i.test(String(field.label ?? ''));
+}

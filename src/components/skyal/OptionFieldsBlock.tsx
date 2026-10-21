@@ -1,7 +1,7 @@
 "use client";
 
 import { normalizeChoices, type OptionField, type ServiceOptionShape } from "@/lib/order";
-import { derivedValue, visibleOptionFields } from '@/lib/order';
+import { derivedValue, isVerbatimTextField, visibleOptionFields } from '@/lib/order';
 import { PRINT_FONTS, fontStack, previewTextFor } from "@/lib/print-fonts";
 
 /**
@@ -275,10 +275,13 @@ function OptionFieldInput({
             className={`${inputClass}${error ? " border-oxblood" : ""} resize-none`}
           />
           {errorLine}
-          {/* This value is reproduced verbatim on the finished piece. */}
-          <p className="text-xs text-thread/70 mt-1.5">
-            Case sensitive — write it exactly as you want it produced.
-          </p>
+          {/* True of the MESSAGE only — a placement note or an age is not cut into
+              the piece, so the hint used to be a lie under every free-text field. */}
+          {isVerbatimTextField(field) && (
+            <p className="text-xs text-thread/70 mt-1.5">
+              Case sensitive — write it exactly as you want it produced.
+            </p>
+          )}
         </div>
       );
     case "number":
@@ -342,10 +345,13 @@ function OptionFieldInput({
             className={`${inputClass}${error ? " border-oxblood" : ""}`}
           />
           {errorLine}
-          {/* This value is reproduced verbatim on the finished piece. */}
-          <p className="text-xs text-thread/70 mt-1.5">
-            Case sensitive — write it exactly as you want it produced.
-          </p>
+          {/* True of the MESSAGE only — a placement note or an age is not cut into
+              the piece, so the hint used to be a lie under every free-text field. */}
+          {isVerbatimTextField(field) && (
+            <p className="text-xs text-thread/70 mt-1.5">
+              Case sensitive — write it exactly as you want it produced.
+            </p>
+          )}
         </div>
       );
   }
