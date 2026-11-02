@@ -81,24 +81,34 @@ export default function DesignsView({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  /* ── Auth gate: read localStorage skyal_customer ── */
+  /* ── Auth gate: a stored blob is not a session ── */
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem("skyal_customer");
-      if (raw) {
-        const c = JSON.parse(raw);
-        if (c?.phone) {
-          setPhone(c.phone);
-        } else {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = localStorage.getItem("skyal_customer");
+        const c = raw ? JSON.parse(raw) : null;
+        if (!c?.token) {
           onNavigate("login");
+          return;
         }
-      } else {
-        onNavigate("login");
+        const me = await apiFetch<{ phone?: string }>("/api/auth/session");
+        if (cancelled) return;
+        if (!me?.phone) {
+          localStorage.removeItem("skyal_customer");
+          onNavigate("login");
+          return;
+        }
+        setPhone(me.phone);
+      } catch {
+        if (!cancelled) onNavigate("login");
+      } finally {
+        if (!cancelled) setCheckedAuth(true);
       }
-    } catch {
-      onNavigate("login");
-    }
-    setCheckedAuth(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const load = useCallback(async (p: string) => {

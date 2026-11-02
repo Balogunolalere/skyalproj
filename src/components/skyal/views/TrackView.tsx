@@ -36,6 +36,7 @@ export default function TrackView({
   const [loading, setLoading] = useState(false);
   const [order, setOrder] = useState<OrderData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const track = async (val: string) => {
     const v = val.trim();
@@ -44,8 +45,24 @@ export default function TrackView({
     setError(null);
     setOrder(null);
     setSearched(v);
+    setNotice(null);
+    // An order number is a lookup key, not a credential. PII (name, address,
+    // artwork, timeline) is released only for a verified session; anonymous
+    // lookups get status-only data from the backend.
+    let hasSession = false;
     try {
-      const data = await apiFetch(`/api/orders?id=${encodeURIComponent(v)}&brand=SKYAL`);
+      const raw = localStorage.getItem("skyal_customer");
+      hasSession = !!JSON.parse(raw || "null")?.token;
+    } catch {
+      hasSession = false;
+    }
+    if (!hasSession) {
+      setNotice("Sign in to see your name, delivery address and design files.");
+    }
+    try {
+      const data = await apiFetch(
+        `/api/orders?id=${encodeURIComponent(v)}&brand=SKYAL`,
+      );
       setOrder(data as never);
       setError(null);
     } catch (err) {
@@ -128,6 +145,13 @@ export default function TrackView({
           Track
         </button>
       </form>
+
+      {/* Privacy notice for anonymous lookups */}
+      {notice && !error && order && (
+        <div className="mt-6 bg-vellum border-l-2 border-laser p-4">
+          <p className="text-sm text-ink">{notice}</p>
+        </div>
+      )}
 
       {/* Loading */}
       {loading && (

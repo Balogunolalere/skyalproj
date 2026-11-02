@@ -9,6 +9,13 @@ type Mode = "login" | "register";
 
 import { apiFetch, ApiError } from "@/lib/api";
 
+interface VerifiedCustomer {
+  phone: string;
+  name?: string;
+  email?: string;
+  brand?: string;
+}
+
 export default function LoginView({
   onNavigate,
 }: {
@@ -18,63 +25,93 @@ export default function LoginView({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const resetCode = () => {
+    setCodeSent(false);
+    setCode("");
+    setNotice(null);
+    setError(null);
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    if (mode === "login") {
-      if (phone.trim().length < 6) {
-        setError("Enter the phone number you ordered with.");
-        return;
-      }
-      setLoading(true);
-      try {
-        // Call admin API to verify phone and get orders — brand filter so a
-        // SKYAL customer never sees PABERIN orders.
-        const data = await apiFetch<{ orders?: { customerName?: string; customerEmail?: string }[] }>(
-          "/api/magic-link",
-          { method: "POST", body: JSON.stringify({ phone: phone.trim(), brand: "SKYAL" }) },
-        );
-        // Get customer name from the most recent order
-        const orders = data?.orders || [];
-        if (orders.length === 0) {
-          setError("No orders found for this phone number.");
-          setLoading(false);
-          return;
-        }
-        const customerName = orders[0]?.customerName || "Customer";
-        const customerEmail = orders[0]?.customerEmail || "";
-        localStorage.setItem(
-          "skyal_customer",
-          JSON.stringify({ name: customerName, phone: phone.trim(), email: customerEmail }),
-        );
-        setLoading(false);
-        onNavigate("dashboard");
-      } catch (err) {
-        // "No orders found" is only true for a 404. A rate limit or a server
-        // fault used to fall back to that sentence too, which told a customer
-        // with real orders that they do not exist.
-        const e = err as ApiError;
-        setError(
-          e?.isNotFound
-            ? "No orders found for this phone number."
-            : e?.message || "Could not sign you in. Please try again.",
+    if (phone.trim().length < 6) {
+      setError("Enter the phone number you ordered with.");
+      return;
+    }
+    if (mode === "register" && (!name.trim() || !email.trim())) {
+      setError("Fill in your name, phone and email.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      if (!codeSent) {
+        // Step 1: ask the backend to email a one-time code. A phone number is
+        // not a credential, so no order data is returned at this point.
+        await apiFetch("/api/auth/otp/request", {
+          method: "POST",
+          body: JSON.stringify({
+            phone: phone.trim(),
+            brand: "SKYAL",
+            ...(mode === "register" ? { name: name.trim(), email: email.trim() } : {}),
+          }),
+        });
+        setCodeSent(true);
+        setNotice(
+          "If this number has an email on file, a one-time code is on its way. Enter it below — it expires in 10 minutes.",
         );
         setLoading(false);
-      }
-    } else {
-      if (!name.trim() || !phone.trim() || !email.trim()) {
-        setError("Fill in your name, phone and email.");
         return;
       }
+
+      // Step 2: exchange the code for a signed, expiring session token.
+      const session = await apiFetch<{ token: string; customer: VerifiedCustomer }>(
+        "/api/auth/otp/verify",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            phone: phone.trim(),
+            code: code.trim(),
+            brand: "SKYAL",
+            ...(mode === "register" ? { name: name.trim(), email: email.trim() } : {}),
+          }),
+        },
+      );
+      if (!session?.token) {
+        setError("Could not verify that code. Please try again.");
+        setLoading(false);
+        return;
+      }
+
       localStorage.setItem(
         "skyal_customer",
-        JSON.stringify({ name: name.trim(), phone: phone.trim(), email: email.trim() }),
+        JSON.stringify({
+          name: session.customer?.name || name.trim() || "Customer",
+          phone: session.customer?.phone || phone.trim(),
+          email: session.customer?.email || email.trim() || "",
+          token: session.token,
+        }),
       );
+      setLoading(false);
       onNavigate("dashboard");
+    } catch (err) {
+      // "No orders found" is only true for a 404. A rate limit or a server
+      // fault must not tell a customer with real orders that they do not exist.
+      const e = err as ApiError;
+      setError(
+        e?.isNotFound
+          ? "No orders found for this phone number."
+          : e?.message || "Could not sign you in. Please try again.",
+      );
+      setLoading(false);
     }
   };
 
@@ -88,9 +125,9 @@ export default function LoginView({
             Access your orders
           </Heading>
           <p className="text-base text-thread mt-6 max-w-[440px] leading-relaxed">
-            Returning customer? Log in with the phone number you ordered with —
-            we&apos;ll pull up your history. New here? Save your details and
-            we&apos;ll recognise you next time.
+            We email a one-time code to the address on your orders. No password
+            to forget — and knowing your phone number alone is not enough to
+            open your account.
           </p>
 
           {/* Mode toggle */}
@@ -98,7 +135,10 @@ export default function LoginView({
             {(["login", "register"] as Mode[]).map((m) => (
               <button
                 key={m}
-                onClick={() => setMode(m)}
+                onClick={() => {
+                  setMode(m);
+                  resetCode();
+                }}
                 className={`text-sm font-medium pb-3 transition-colors ${
                   mode === m ? "text-ink border-b-2 border-laser -mb-px" : "text-thread hover:text-ink"
                 }`}
@@ -108,6 +148,12 @@ export default function LoginView({
             ))}
           </div>
 
+          {notice && (
+            <div className="mt-5 bg-laser/10 border-l-2 border-laser px-4 py-3 text-sm text-ink">
+              {notice}
+            </div>
+          )}
+
           {error && (
             <div className="mt-5 bg-oxblood/10 border-l-2 border-oxblood px-4 py-3 text-sm text-oxblood">
               {error}
@@ -115,25 +161,46 @@ export default function LoginView({
           )}
 
           <form onSubmit={submit} className="mt-8 space-y-7">
-            {mode === "register" && (
+            {mode === "register" && !codeSent && (
               <Field label="Your name" value={name} onChange={setName} placeholder="Company or individual" />
             )}
             <Field label="Phone number" value={phone} onChange={setPhone} placeholder="0803 000 0000" type="tel" />
-            {mode === "register" && (
+            {mode === "register" && !codeSent && (
               <Field label="Email" value={email} onChange={setEmail} placeholder="you@studio.com" type="email" />
             )}
-            <button
-              type="submit"
-              disabled={loading}
-              className="inline-flex items-center gap-2 bg-ink text-bone text-sm font-medium px-7 py-3.5 hover:bg-laser hover:text-white transition-colors active:scale-[0.98] disabled:opacity-50"
-            >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-              {loading ? "Verifying..." : mode === "login" ? "Access orders" : "Continue"}
-            </button>
+            {codeSent && (
+              <Field
+                label="One-time code"
+                value={code}
+                onChange={setCode}
+                placeholder="6-digit code"
+                type="text"
+              />
+            )}
+            <div className="flex items-center gap-4 flex-wrap">
+              <button
+                type="submit"
+                disabled={loading}
+                className="inline-flex items-center gap-2 bg-ink text-bone text-sm font-medium px-7 py-3.5 hover:bg-laser hover:text-white transition-colors active:scale-[0.98] disabled:opacity-50"
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {loading ? "Checking..." : codeSent ? "Verify code" : "Send login code"}
+              </button>
+              {codeSent && (
+                <button
+                  type="button"
+                  onClick={resetCode}
+                  className="text-sm text-thread hover:text-ink transition-colors"
+                >
+                  Change number
+                </button>
+              )}
+            </div>
           </form>
 
           <p className="text-xs text-thread mt-6">
-            We verify by phone — no password. Your profile is stored on this device.
+            New customer? Switch to the New customer tab, enter your details and
+            verify the same way — we&apos;ll set you up at checkout.
           </p>
         </div>
 
@@ -151,10 +218,10 @@ export default function LoginView({
           <div className="bg-vellum border border-hairline p-6">
             <Coord>HOW IT WORKS</Coord>
             <p className="text-sm text-thread mt-3 leading-relaxed">
-              Enter the phone number from your last order. We verify it against
-              our system and pull up your real order history — no password
-              required. No account yet? Switch to the New customer tab, save
-              your details, and place your first order.
+              Enter the phone number from your last order. We email a short-lived
+              code to the address on file; entering it proves you own the number
+              and opens your real order history. A phone number by itself never
+              grants access.
             </p>
           </div>
           <button

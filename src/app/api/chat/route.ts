@@ -48,14 +48,19 @@ function cacheGet(k: string): string | null { const e = cache.get(k); if (!e || 
 function cacheSet(k: string, v: string) { if (cache.size >= MAX_CACHE) { const f = cache.keys().next(); if (!f.done) cache.delete(f.value); } cache.set(k, { reply: v, ts: Date.now() }); }
 
 // ── Save to admin backend (fire-and-forget, best-effort) ──
-async function saveToAdmin(sessionId: string, messages: Array<{ role: string; content: string }>, customerPhone?: string) {
+async function saveToAdmin(sessionId: string, messages: Array<{ role: string; content: string }>, token?: string) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 5000);
   try {
     await fetch(`${ADMIN_API_URL}/api/skyal/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: messages[messages.length - 1]?.content || '', brand: "skyal", mode: "live", history: messages.slice(0, -1), sessionId, persist_only: true, customerPhone }),
+      headers: {
+        "Content-Type": "application/json",
+        // Only a verified session attributes the transcript to a customer; the
+        // backend derives the phone from this token, never from the body.
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ message: messages[messages.length - 1]?.content || '', brand: "skyal", mode: "live", history: messages.slice(0, -1), sessionId, persist_only: true }),
       signal: controller.signal,
     });
   } catch {
@@ -189,48 +194,16 @@ function priceLine(quote: NonNullable<ChatResponse['quote']>): string {
   return `\n\n💰 Your price: ${parts.join(' · ')}. Review and pay to confirm your order.`;
 }
 
-/** Best-effort: open saved quote snapshots for the phone (first turn only).
- *  The phone is validated defensively (the admin enforces 7–15 digits) and
- *  rows are mapped to a minimal safe shape — `requestJson` (which can embed
- *  customer PII) is never passed through to the client. */
-async function fetchOpenQuotes(customerPhone: string): Promise<ChatResponse['openQuotes']> {
-  const digits = customerPhone.replace(/\D/g, '');
-  if (digits.length < 7 || digits.length > 15) return undefined;
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(`${ADMIN_API_URL}/api/quotes?phone=${encodeURIComponent(customerPhone)}`, {
-      signal: controller.signal,
-      cache: 'no-store',
-    }).finally(() => clearTimeout(timeoutId));
-    if (!res.ok) return undefined;
-    const json = await res.json().catch(() => null);
-    if (!Array.isArray(json?.data)) return undefined;
-    return json.data.map((q: any) => ({
-      id: q?.id,
-      quoteNumber: q?.quoteNumber,
-      totalAmount: q?.totalAmount,
-      discount: q?.discount,
-      deliveryFee: q?.deliveryFee,
-      serviceType: q?.serviceType,
-      status: q?.status,
-      expiresAt: q?.expiresAt,
-      createdAt: q?.createdAt,
-    }));
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Resolve the assistant's raw text into the response extras: engine quote for
- * catalog jobs, custom handoff for bespoke jobs, open saved quotes on the
- * first turn. Shared by the fresh path and the cached path.
+ * catalog jobs, custom handoff for bespoke jobs. Customer-specific open quotes
+ * are NOT fetched here — this route is reachable without a session, and a phone
+ * in the body is not proof of ownership. The dashboard serves those over the
+ * verified session.
  */
 async function resolveExtras(
   rawAssistantText: string,
-  customerPhone: string | undefined,
-  isFirstTurn: boolean
+  customerPhone: string | undefined
 ): Promise<{ assistantText: string; quote: ChatResponse['quote']; custom: ChatResponse['custom']; openQuotes: ChatResponse['openQuotes']; renderOrderNow: boolean }> {
   const specs = parseSpecsBlock(rawAssistantText);
   const baseText = cleanAssistantText(rawAssistantText);
@@ -266,10 +239,9 @@ async function resolveExtras(
     assistantText = `${baseText}\n\nI've noted your custom job. Tap "Place custom order" to send it to our team — we'll confirm the price right away.`;
   }
 
-  let openQuotes: ChatResponse['openQuotes'];
-  if (isFirstTurn && typeof customerPhone === 'string' && customerPhone.trim()) {
-    openQuotes = await fetchOpenQuotes(customerPhone.trim());
-  }
+  // Never attach customer-specific quote data to an unauthenticated chat
+  // response. The dashboard serves open quotes over the verified session.
+  const openQuotes: ChatResponse['openQuotes'] = undefined;
 
   return { assistantText, quote, custom, openQuotes, renderOrderNow: quote !== undefined };
 }
@@ -280,6 +252,24 @@ async function resolveExtras(
 
 export async function POST(req: NextRequest) {
   try {
+    // Rate limit BEFORE parsing the body: an oversized or malformed payload
+    // must not consume parsing work. Prefer the edge-set x-real-ip; otherwise
+    // use the LAST x-forwarded-for hop (the one our proxy appended), never the
+    // client-supplied first entry.
+    const forwardedFor = req.headers.get('x-forwarded-for');
+    const forwardedHops = (forwardedFor ? forwardedFor.split(',') : []).map((s) => s.trim()).filter(Boolean);
+    const clientIp = req.headers.get('x-real-ip')?.trim() || forwardedHops[forwardedHops.length - 1] || 'unknown';
+    if (!rateLimiter.acquire(clientIp)) {
+      return NextResponse.json(
+        {
+          error: 'Rate limit exceeded',
+          message: `Too many requests. Please try again later. Limit: ${RATE_LIMIT_MAX} per ${RATE_LIMIT_WINDOW / 1000} seconds.`,
+          reply: 'Too many requests. Try again later.',
+          rateLimit: true,
+        },
+        { status: 429 }
+      );
+    }
     const body = await req.json().catch(() => null);
     if (!body || typeof body !== 'object') {
       return NextResponse.json(
@@ -370,26 +360,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ── Rate limit check (per client IP) ──
-    // Use the LAST x-forwarded-for entry: proxies append the client IP, so the
-    // rightmost entry is the one closest to this server and the least
-    // attacker-influenceable among the entries (on Vercel it is set by the
-    // platform itself). Note: this limiter is a blunt per-instance instrument,
-    // not a hard security boundary.
-    const forwardedFor = req.headers.get('x-forwarded-for');
-    const clientIp = (forwardedFor ? forwardedFor.split(',') : []).map((s) => s.trim()).filter(Boolean).pop() || 'unknown';
-    if (!rateLimiter.acquire(clientIp)) {
-      return NextResponse.json(
-        {
-          error: 'Rate limit exceeded',
-          message: `Too many requests. Please try again later. Limit: ${RATE_LIMIT_MAX} per ${RATE_LIMIT_WINDOW / 1000} seconds.`,
-          reply: 'Too many requests. Try again later.',
-          rateLimit: true,
-        },
-        { status: 429 }
-      );
-    }
-
     const key = process.env.DEEPSEEK_API_KEY;
     if (!key) return NextResponse.json({ reply: 'AI not configured. Contact support.', error: 'AI not configured' }, { status: 500 });
 
@@ -424,7 +394,7 @@ export async function POST(req: NextRequest) {
         typeof customerPhone === 'string' && customerPhone.replace(/\D/g, '').length >= 7
           ? customerPhone
           : undefined;
-      const extras = await resolveExtras(cached, custPhoneVal, sanitizedHistory.length === 0);
+      const extras = await resolveExtras(cached, custPhoneVal);
       return NextResponse.json({
         reply: extras.assistantText,
         assistant_text: extras.assistantText,
@@ -511,22 +481,26 @@ export async function POST(req: NextRequest) {
 
     if (ck && rawAssistantText) cacheSet(ck, rawAssistantText);
 
+    const authorization = req.headers.get('authorization') || '';
+    const sessionToken = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
     const customerPhoneVal = (() => {
+      // A phone in the body is attacker-controlled. Attribution to a customer
+      // requires a session token; the backend verifies it and derives the phone.
+      if (!sessionToken) return undefined;
       if (typeof customerPhone !== 'string') return undefined;
       const digits = customerPhone.replace(/\D/g, '');
       // Defensive: only phones that look real (7–15 digits) may be sent to
-      // the admin engine / quotes endpoints — never arbitrary strings.
+      // the admin engine — never arbitrary strings.
       return digits.length >= 7 && digits.length <= 15 ? customerPhone : undefined;
     })();
-    const extras = await resolveExtras(rawAssistantText, customerPhoneVal, sanitizedHistory.length === 0);
+    const extras = await resolveExtras(rawAssistantText, customerPhoneVal);
 
     // ── Fire-and-forget: save session to admin backend for admin viewing ──
     const allMsgs = [
-      ...sanitizedHistory,
       { role: 'user' as const, content: message },
       { role: 'assistant' as const, content: extras.assistantText },
     ];
-    saveToAdmin(sessionId, allMsgs, customerPhoneVal).catch(() => {}); // Explicitly swallow — must not throw
+    saveToAdmin(sessionId, allMsgs, sessionToken).catch(() => {}); // Explicitly swallow — must not throw
 
     return NextResponse.json({
       reply: extras.assistantText,

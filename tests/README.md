@@ -57,7 +57,7 @@ API_BASE=http://localhost:3000
 DEEPSEEK_API_KEY=your-key-here
 
 # Paystack test keys (for payment tests)
-PAYSTACK_SECRET_KEY=sk_test_9bf956c2dd003fe655e372a1b34156316490163a
+PAYSTACK_SECRET_KEY=your_test_secret_key_here
 PAYSTACK_PUBLIC_KEY=pk_test_02d663e4d9074c4742b67313b0ce252c8f640afb
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 NEXT_PUBLIC_ADMIN_API_URL=http://localhost:3000

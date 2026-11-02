@@ -40,7 +40,7 @@ export default function OrderCompletePage() {
       try {
         const verifyData = await apiFetch<{ verified?: boolean; message?: string }>("/api/payment/verify", {
           method: 'POST',
-          body: JSON.stringify({ reference: ref }),
+          body: JSON.stringify({ reference: ref, orderNumber: orderNum || undefined }),
         });
 
         if (!verifyData?.verified) {
@@ -137,12 +137,21 @@ export default function OrderCompletePage() {
   const customerPhone = orderDetails?.customerPhone || storedCustomer.phone || '';
   const createdAt = orderDetails?.createdAt || new Date().toISOString();
 
+  // A receipt is a PAID claim. /api/payment/verify checks the reference only;
+  // the receipt is therefore issued ONLY for an order the backend itself
+  // reports as paid — never merely because a reference was verified.
+  const PAID_STATES = new Set([
+    'PAYMENT_SUCCESS', 'IN_QUEUE', 'IN_PRODUCTION', 'READY', 'DISPATCHED', 'DELIVERED',
+  ]);
+  const orderPaid = !!orderDetails && PAID_STATES.has(String(orderDetails?.state || ''));
+
   // Generate and print receipt (opens browser print dialog → save as PDF)
   // NOTE: customer values may come from localStorage — escape before
   // interpolating into the print window's HTML.
   const esc = (s: string) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const printReceipt = () => {
+    if (!orderPaid) return;
     const receiptHTML = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>Receipt ${esc(displayOrder)}</title>
 <style>
@@ -182,9 +191,9 @@ export default function OrderCompletePage() {
     <div className="min-h-screen flex items-center justify-center bg-bone">
       <div className="max-w-md mx-auto p-8 bg-vellum border border-hairline rounded-lg text-center">
         <CheckCircle2 className="w-16 h-16 text-laser mx-auto mb-4" />
-        <h2 className="font-display text-2xl text-ink mb-2">Payment Confirmed!</h2>
+        <h2 className="font-display text-2xl text-ink mb-2">{orderPaid ? 'Payment Confirmed!' : 'Payment Verified'}</h2>
         
-        {orderDetails ? (
+        {orderPaid ? (
           <>
             <p className="text-sm text-thread mb-6">
               Your order <span className="font-mono font-semibold">{displayOrder}</span> has been paid and is being processed.
@@ -209,18 +218,10 @@ export default function OrderCompletePage() {
             </button>
           </>
         ) : (
-          <>
-            <p className="text-sm text-thread mb-6">
-              Your order has been paid and is being processed.
-            </p>
-            {/* Print Receipt Button (for when orderDetails is not available) */}
-            <button
-              onClick={printReceipt}
-              className="px-6 py-3 border border-ink/25 text-ink rounded hover:bg-ink hover:text-bone transition-colors mb-4 flex items-center justify-center gap-2 w-full"
-            >
-              🖨️ Print / Save Receipt (PDF)
-            </button>
-          </>
+          <p className="text-sm text-thread mb-6">
+            Your payment was verified. We are still confirming this order — refresh in a
+            moment to print your receipt.
+          </p>
         )}
         
         <div className="flex gap-3 justify-center flex-wrap">

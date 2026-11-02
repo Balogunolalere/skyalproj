@@ -295,11 +295,12 @@ export default function DashboardView({
   const [openQuotes, setOpenQuotes] = useState<SavedQuote[]>([]);
   const [quotesError, setQuotesError] = useState<string | null>(null);
 
-  const loadQuotes = useCallback(async () => {
-    if (!phone) return;
+  const loadQuotes = useCallback(async (phoneVal?: string) => {
+    const p = phoneVal || phone;
+    if (!p) return;
     try {
       const data = await apiFetch<SavedQuote[] | { quotes?: SavedQuote[] }>(
-        `/api/quotes?phone=${encodeURIComponent(phone)}`,
+        `/api/quotes?phone=${encodeURIComponent(p)}`,
       );
       const list = Array.isArray(data) ? data : data?.quotes || [];
       setOpenQuotes(list);
@@ -341,6 +342,7 @@ export default function DashboardView({
           amount: order.totalAmount,
           email,
           orderNumber: order.orderNumber,
+          customerPhone: phone,
           brand: "SKYAL",
           metadata: { orderNumber: order.orderNumber, brand: "SKYAL" },
           callbackUrl: `${appOrigin}/order/complete?order=${order.orderNumber}`,
@@ -583,34 +585,38 @@ export default function DashboardView({
   };
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem("skyal_customer");
-      if (raw) {
-        const c = JSON.parse(raw);
-        if (c?.name) {
-          setName(c.name);
-          setSignedIn(true);
-          if (c.phone) {
-            setPhone(c.phone);
-            fetchOrders(c.phone);
-            fetchEscalations(c.phone);
-            loadEmailPreferences(c.phone);
-            loadQuotes();
-          } else {
-            // Signed in but no phone on file — can't fetch orders.
-            onNavigate("login");
-          }
-        } else {
-          // Stored customer is invalid — redirect to login.
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = localStorage.getItem("skyal_customer");
+        const c = raw ? JSON.parse(raw) : null;
+        if (!c?.token) {
           onNavigate("login");
+          return;
         }
-      } else {
-        // No customer at all — redirect to login immediately.
-        onNavigate("login");
+        // A localStorage blob is not a session. Ask the backend which customer
+        // this token belongs to before rendering any account data.
+        const me = await apiFetch<{ name?: string; phone?: string }>("/api/auth/session");
+        if (cancelled) return;
+        if (!me?.phone) {
+          localStorage.removeItem("skyal_customer");
+          onNavigate("login");
+          return;
+        }
+        setName(me.name || c.name || "there");
+        setSignedIn(true);
+        setPhone(me.phone);
+        fetchOrders(me.phone);
+        fetchEscalations(me.phone);
+        loadEmailPreferences(me.phone);
+        loadQuotes(me.phone);
+      } catch {
+        if (!cancelled) onNavigate("login");
       }
-    } catch {
-      onNavigate("login");
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /* ── Profile: open editor with current values ── */
@@ -634,10 +640,20 @@ export default function DashboardView({
 
   /* ── Profile: save updated details to localStorage ── */
   const saveProfile = () => {
+    let token: string | undefined;
+    try {
+      const raw = localStorage.getItem("skyal_customer");
+      if (raw) token = JSON.parse(raw)?.token;
+    } catch {
+      // ignore
+    }
     const next = {
       name: editName.trim() || name,
       email: editEmail.trim(),
       phone,
+      // Never drop the session token when saving the profile: without it the
+      // dashboard would be logged out on the next visit.
+      ...(token ? { token } : {}),
     };
     try {
       localStorage.setItem("skyal_customer", JSON.stringify(next));

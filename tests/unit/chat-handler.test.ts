@@ -235,7 +235,10 @@ describe('POST /api/chat — engine pricing happy path', () => {
         return engineQuote(40000, 'fabric_sleeves', 'Standard', 2)
       }
     )
-    const { body } = await send({ ...mkBody('Two pairs of sleeves please'), customerPhone: '08035003068' })
+    const { body } = await send(
+      { ...mkBody('Two pairs of sleeves please'), customerPhone: '08035003068' },
+      { Authorization: 'Bearer test-session-token' },
+    )
     expect(body.quote?.price).toBe(40000)
     expect(engineBody.customerPhone).toBe('08035003068')
   })
@@ -322,12 +325,14 @@ describe('POST /api/chat — engine pricing happy path', () => {
     expect(body.assistant_text).toContain("couldn't confirm the exact price")
   })
 
-  test('should surface saved OPEN quotes on the first turn', async () => {
+  test('should NOT surface saved quotes on the unauthenticated chat route', async () => {
     mockFetch(
       () => jsonResponse(deepseekCompletion('Sure, what are you cutting?'))
     )
     const { body } = await send({ ...mkBody('Do you remember my saved quote?'), customerPhone: '08035003068' })
-    expect(body.openQuotes).toBeDefined()
+    // A phone in the body is not proof of ownership; open quotes are served to
+    // the authenticated dashboard, never attached to an anonymous chat reply.
+    expect(body.openQuotes).toBeUndefined()
   })
 
   test('should reuse the incoming session ID', async () => {

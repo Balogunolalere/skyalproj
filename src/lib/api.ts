@@ -16,6 +16,18 @@
  */
 const API_URL = process.env.NEXT_PUBLIC_ADMIN_API_URL || 'https://skyalxpaberin-admin.vercel.app';
 
+/** The signed session token issued by the backend after OTP verification. */
+function getSessionToken(): string | null {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem('skyal_customer') : null;
+    if (!raw) return null;
+    const token = JSON.parse(raw)?.token;
+    return typeof token === 'string' && token ? token : null;
+  } catch {
+    return null;
+  }
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
@@ -53,10 +65,17 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 
 export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   let res: Response;
+  const token = getSessionToken();
   try {
     res = await fetch(`${API_URL}${path}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        // Proof of the verified session; the backend derives the customer
+        // identity from this token, never from a phone/order field in the body.
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options?.headers || {}),
+      },
       cache: 'no-store',
       // Callers may pass their own signal (a longer upload, say).
       signal: options?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
