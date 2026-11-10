@@ -85,6 +85,8 @@ interface Service {
   type: string;
   label: string;
   description: string;
+  /** Optional product photo shown on the service picker. */
+  imageUrl?: string | null;
   category: string;
   basePriceNaira: number;
   unit: string;
@@ -1306,6 +1308,14 @@ export default function OrderView({
                             : "border-hairline bg-bone hover:border-ink/40"
                         }`}
                       >
+                        {s.imageUrl ? (
+                          <img
+                            src={s.imageUrl}
+                            alt={s.label}
+                            loading="lazy"
+                            className="w-full h-36 object-cover mb-3"
+                          />
+                        ) : null}
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="font-display font-semibold text-lg text-ink mt-0.5">{s.label}</div>
