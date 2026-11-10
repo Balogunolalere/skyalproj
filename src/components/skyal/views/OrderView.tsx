@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { ArrowLeft, ArrowRight, Check, Upload, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { ServiceImageCarousel } from "@/components/skyal/ServiceImageCarousel";
 import { toast } from 'sonner';
 import { buildChatOrderNotes } from "@/lib/chat-order";
 import type { ChatSpecs, Availability } from "@/lib/chat";
@@ -87,6 +88,8 @@ interface Service {
   description: string;
   /** Optional product photo shown on the service picker. */
   imageUrl?: string | null;
+  /** Gallery photos; overrides imageUrl when present. */
+  images?: string[];
   category: string;
   basePriceNaira: number;
   unit: string;
@@ -1292,8 +1295,10 @@ export default function OrderView({
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {list.map((s) => (
-                      <button
+                      <div
                         key={s.id}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => {
                           setServiceType(s.type);
                           // Options are per-service — never carry a previous
@@ -1302,20 +1307,22 @@ export default function OrderView({
                           setSelectedVariant("");
                           setCustomMode(false);
                         }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setServiceType(s.type);
+                            setSelectedOptions({});
+                            setSelectedVariant("");
+                            setCustomMode(false);
+                          }
+                        }}
                         className={`text-left p-5 border transition-colors ${
                           serviceType === s.type
                             ? "border-laser bg-vellum"
                             : "border-hairline bg-bone hover:border-ink/40"
                         }`}
                       >
-                        {s.imageUrl ? (
-                          <img
-                            src={s.imageUrl}
-                            alt={s.label}
-                            loading="lazy"
-                            className="w-full h-36 object-cover mb-3"
-                          />
-                        ) : null}
+                        <ServiceImageCarousel images={s.images} alt={s.label} />
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="font-display font-semibold text-lg text-ink mt-0.5">{s.label}</div>
@@ -1331,7 +1338,7 @@ export default function OrderView({
                             {s.standardLeadTime}
                           </div>
                         </div>
-                      </button>
+                      </div>
                     ))}
                   </div>
                 </div>
