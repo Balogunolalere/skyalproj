@@ -179,6 +179,15 @@ async function callAdminQuote(specs: ChatSpecs, customerPhone?: string): Promise
     price: data.quoteNaira,
     breakdown,
     summary: `${breakdown.serviceLabel || specs.service_type}: ${data.quoteNaira.toLocaleString('en-NG')} naira${breakdown.leadTime ? ` · ${breakdown.leadTime}` : ''}`,
+    // The order form is prefilled from this object. Everything the customer
+    // answered in chat must travel with the quote, not be re-asked.
+    ...(specs.selected_options ? { selected_options: specs.selected_options } : {}),
+    requested_pickup_time: payload.requestedPickupTime,
+    ...(specs.delivery ? { delivery: specs.delivery } : {}),
+    ...(specs.delivery_address ? { delivery_address: specs.delivery_address } : {}),
+    service_type: serviceType,
+    quantity: specs.quantity,
+    ...(specs.sla ? { sla: specs.sla } : {}),
   };
   return { quote, availability: data.availability ?? null };
 }

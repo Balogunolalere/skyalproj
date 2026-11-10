@@ -41,6 +41,15 @@ export interface ChatQuote {
   bulk_discount?: number;
   breakdown?: QuoteBreakdown;
   summary?: string;
+  /** What the customer chose in chat, carried so the order form can prefill
+   *  every option (colour, message, cake height, …) instead of asking again. */
+  selected_options?: Record<string, string>;
+  requested_pickup_time?: string;
+  delivery?: 'PICKUP' | 'LOCAL_DELIVERY';
+  delivery_address?: string;
+  service_type?: string | null;
+  quantity?: number;
+  sla?: 'Standard' | 'Express';
 }
 
 /** Structured request extracted by the assistant — NEVER contains a price. */

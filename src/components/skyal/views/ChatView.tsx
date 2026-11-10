@@ -5,7 +5,7 @@ import { type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { Logo } from "../Logo";
 import { Send, Trash2, AlertCircle, Paperclip, X, ArrowRight, Loader2, Plus } from "lucide-react";
-import type { ChatSpecs, ChatAttachment } from "@/lib/chat";
+import type { ChatSpecs, ChatAttachment, ChatQuote } from "@/lib/chat";
 import { CHAT_IMAGE_MAX, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_TYPES } from "@/lib/chat";
 import { buildChatSpecs } from "@/lib/chat-prefill";
 import { apiFetch } from "@/lib/api";
@@ -18,7 +18,7 @@ interface Msg {
   error?: boolean;
   image?: string;
   images?: string[];
-  quote?: { price: number; summary?: string; renderOrderNow?: boolean; breakdown?: Record<string, unknown> };
+  quote?: ChatQuote & { renderOrderNow?: boolean };
   custom?: { description: string; material?: string; quantity: number; sla?: string };
 }
 
@@ -97,7 +97,9 @@ export default function ChatView({
     const attachments = pendingImages;
     if ((!clean && attachments.length === 0) || busy || uploading) return;
     lastUserQueryRef.current = clean || "(image attached)";
-    lastAttachmentsRef.current = attachments.map(({ dataUrl: _dataUrl, ...rest }) => rest);
+    if (attachments.length > 0) {
+      lastAttachmentsRef.current = attachments.map(({ dataUrl: _dataUrl, ...rest }) => rest);
+    }
     const userMsg: Msg = {
       id: `u-${Date.now()}`,
       who: "customer",
@@ -150,7 +152,7 @@ export default function ChatView({
       const data = await res.json();
       if (data.sessionId) setSessionId(data.sessionId);
       const replyText = data.assistant_text || data.reply || "(no response)";
-      const quote = data.quote ? { price: data.quote.price, summary: data.quote.summary, renderOrderNow: data.render_order_now, breakdown: data.quote.breakdown } : undefined;
+      const quote = data.quote ? { ...data.quote, renderOrderNow: data.render_order_now } : undefined;
       const custom = data.custom ? { description: data.custom.description, material: data.custom.material, quantity: data.custom.quantity, sla: data.custom.sla } : undefined;
 
       setMsgs(prev => [...prev, { id: `s-${Date.now()}`, who: "support", text: replyText, time: now(), quote, custom }]);
