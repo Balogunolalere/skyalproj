@@ -205,6 +205,14 @@ export default function OrderView({
   const [services, setServices] = useState<Service[]>([]);
   const [servicesLoading, setServicesLoading] = useState(true);
   const [servicesError, setServicesError] = useState<string | null>(null);
+  const [serviceSearch, setServiceSearch] = useState("");
+  const filteredServices = useMemo(() => {
+    const q = serviceSearch.trim().toLowerCase();
+    if (!q) return services;
+    return services.filter((s) =>
+      `${s.label} ${s.description} ${s.category} ${s.type}`.toLowerCase().includes(q),
+    );
+  }, [services, serviceSearch]);
   const [serviceType, setServiceType] = useState<string>("");
   const [qty, setQty] = useState(1);
   const [sla, setSla] = useState<"Standard" | "Express">("Standard");
@@ -638,8 +646,8 @@ export default function OrderView({
        services alphabetical within each. The API's own order put "Full Buba"
        above "Bottom of Wrapper" and mixed the categories together. */
   const servicesByCategory = useMemo(
-    () => groupServices(services).map((g) => [g.category, g.services] as [string, Service[]]),
-    [services],
+    () => groupServices(filteredServices).map((g) => [g.category, g.services] as [string, Service[]]),
+    [filteredServices],
   );
 
   /* ── Fallback estimate (used when the quote API hasn't replied yet).
@@ -1285,6 +1293,28 @@ export default function OrderView({
                   >
                     ← Browse catalog services instead
                   </button>
+                </div>
+              )}
+
+              {!customMode && !servicesLoading && !servicesError && services.length > 0 && (
+                <div className="mb-5">
+                  <input
+                    type="search"
+                    value={serviceSearch}
+                    onChange={(e) => setServiceSearch(e.target.value)}
+                    placeholder="Search services by name, category or description…"
+                    aria-label="Search services"
+                    data-testid="service-search"
+                    className="w-full border border-hairline bg-bone px-4 py-3 text-sm text-ink placeholder:text-thread focus:border-laser focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {!customMode && !servicesLoading && !servicesError && services.length > 0 && filteredServices.length === 0 && (
+                <div className="border border-hairline bg-vellum p-8 text-center">
+                  <p className="text-sm text-thread">
+                    No services match “{serviceSearch}”. Try a shorter search.
+                  </p>
                 </div>
               )}
 
