@@ -404,6 +404,8 @@ export default function ChatView({
             type="button"
             onClick={() => fileRef.current?.click()}
             disabled={busy || uploading}
+            aria-label="Attach reference images"
+            title={`Attach up to ${CHAT_IMAGE_MAX} images (5MB each, PNG/JPEG/WebP)`}
             className="w-9 h-9 flex items-center justify-center text-thread hover:text-ink transition-colors disabled:opacity-40"
           >
             <Paperclip className="w-4 h-4" />
