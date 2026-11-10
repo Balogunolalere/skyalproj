@@ -66,6 +66,21 @@ export interface ChatSpecs {
   selected_options?: Record<string, string>;
 }
 
+/** One reference image uploaded from the chat composer and carried into the
+ *  order form. `dataUrl` is only used for the in-chat preview; the handoff keeps
+ *  the Cloudinary URL. */
+export interface ChatAttachment {
+  url: string;
+  publicId?: string;
+  name: string;
+  dataUrl?: string;
+}
+
+/** Chat attachment limits — enforced in the browser and by /api/upload. */
+export const CHAT_IMAGE_MAX = 3;
+export const CHAT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+export const CHAT_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
+
 /** Material availability surfaced by the admin pricing engine. */
 export interface Availability {
   status: 'IN_STOCK' | 'LOW' | 'OUT_OF_STOCK';

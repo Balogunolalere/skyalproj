@@ -5,8 +5,10 @@ import { type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { Logo } from "../Logo";
 import { Send, Trash2, AlertCircle, Paperclip, X, ArrowRight, Loader2, Plus } from "lucide-react";
-import type { ChatSpecs } from "@/lib/chat";
+import type { ChatSpecs, ChatAttachment } from "@/lib/chat";
+import { CHAT_IMAGE_MAX, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_TYPES } from "@/lib/chat";
 import { buildChatSpecs } from "@/lib/chat-prefill";
+import { apiFetch } from "@/lib/api";
 
 interface Msg {
   id: string;
@@ -15,6 +17,7 @@ interface Msg {
   time: string;
   error?: boolean;
   image?: string;
+  images?: string[];
   quote?: { price: number; summary?: string; renderOrderNow?: boolean; breakdown?: Record<string, unknown> };
   custom?: { description: string; material?: string; quantity: number; sla?: string };
 }
@@ -67,14 +70,17 @@ export default function ChatView({
 }: {
   onNavigate: (v: ViewId) => void;
   /** Engine-priced catalog job → hand off the [SPECS] to the order form. */
-  onOrderWithQuote?: (handoff: { specs: ChatSpecs; context?: string }) => void;
+  onOrderWithQuote?: (handoff: { specs: ChatSpecs; context?: string; attachments?: ChatAttachment[] }) => void;
   /** No catalog match → hand off a custom job (custom mode in the order form). */
-  onOrderCustom?: (handoff: { specs: ChatSpecs; context?: string }) => void;
+  onOrderCustom?: (handoff: { specs: ChatSpecs; context?: string; attachments?: ChatAttachment[] }) => void;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [pendingImages, setPendingImages] = useState<ChatAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const lastAttachmentsRef = useRef<ChatAttachment[]>([]);
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [openQuotes, setOpenQuotes] = useState<Array<{ id: string; quoteNumber: string; totalAmount: number; expiresAt?: string | null }> | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -88,17 +94,36 @@ export default function ChatView({
 
   const send = useCallback(async (text: string) => {
     const clean = text.trim();
-    if ((!clean && !pendingImage) || busy) return;
+    const attachments = pendingImages;
+    if ((!clean && attachments.length === 0) || busy || uploading) return;
     lastUserQueryRef.current = clean || "(image attached)";
-    const userMsg: Msg = { id: `u-${Date.now()}`, who: "customer", text: clean || "(image attached)", time: now(), image: pendingImage ?? undefined };
+    lastAttachmentsRef.current = attachments.map(({ dataUrl: _dataUrl, ...rest }) => rest);
+    const userMsg: Msg = {
+      id: `u-${Date.now()}`,
+      who: "customer",
+      text: clean || "(image attached)",
+      time: now(),
+      images: attachments.map((a) => a.dataUrl).filter((x): x is string => !!x),
+    };
     const newMsgs = [...msgs, userMsg];
-    setMsgs(newMsgs); setInput(""); const img = pendingImage; setPendingImage(null); setBusy(true);
+    setMsgs(newMsgs); setInput(""); setPendingImages([]); setAttachmentError(null); setBusy(true);
 
     try {
       const history = msgs.filter(m => !m.error && m.id !== "w").map(m => ({ role: m.who === "support" ? "assistant" : "user", content: m.text }));
-      const payload: Record<string, unknown> = { message: clean, brand: "skyal", mode: "live", history };
+      const attachmentNote = attachments.length
+        ? `\n\n[Customer attached ${attachments.length} reference image${attachments.length > 1 ? "s" : ""}: ${attachments.map((a) => a.url).join(" ")}]`
+        : "";
+      const payload: Record<string, unknown> = {
+        message: `${clean || "Please review the attached reference image(s)."}${attachmentNote}`,
+        brand: "skyal",
+        mode: "live",
+        history,
+      };
       if (sessionId) payload.sessionId = sessionId;
-      if (img) payload.image_base64 = img;
+      if (attachments.length > 0) {
+        if (attachments[0].dataUrl) payload.image_base64 = attachments[0].dataUrl;
+        payload.attachments = attachments.map(({ dataUrl: _dataUrl, ...rest }) => rest);
+      }
       // Attach the customer's phone (if known) so admin chat sessions link to the customer
       try {
         const stored = localStorage.getItem("skyal_customer");
@@ -144,11 +169,62 @@ export default function ChatView({
             : (err.message || "Connection dropped. Try again.");
       setMsgs(prev => [...prev, { id: `e-${Date.now()}`, who: "support", text, time: now(), error: true }]);
     } finally { setBusy(false); }
-  }, [busy, msgs, pendingImage, sessionId]);
+  }, [busy, msgs, pendingImages, sessionId, uploading]);
 
-  const clear = () => { setMsgs([{ id: "w2", who: "support", text: WELCOME, time: now() }]); setInput(""); setPendingImage(null); setSessionId(undefined); };
+  const clear = () => {
+    setMsgs([{ id: "w2", who: "support", text: WELCOME, time: now() }]);
+    setInput("");
+    setPendingImages([]);
+    setAttachmentError(null);
+    lastAttachmentsRef.current = [];
+    setSessionId(undefined);
+  };
 
-  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => setPendingImage(r.result as string); r.readAsDataURL(f); e.target.value = ""; };
+  const readDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+
+  const onFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    setAttachmentError(null);
+    if (pendingImages.length + files.length > CHAT_IMAGE_MAX) {
+      setAttachmentError(`You can attach up to ${CHAT_IMAGE_MAX} images.`);
+      return;
+    }
+    setUploading(true);
+    const next = [...pendingImages];
+    try {
+      for (const file of files) {
+        if (!(CHAT_IMAGE_TYPES as readonly string[]).includes(file.type)) {
+          setAttachmentError(`${file.name}: only PNG, JPEG or WebP images are allowed.`);
+          continue;
+        }
+        if (file.size > CHAT_IMAGE_MAX_BYTES) {
+          setAttachmentError(`${file.name}: exceeds the ${CHAT_IMAGE_MAX_BYTES / 1024 / 1024}MB limit.`);
+          continue;
+        }
+        try {
+          const dataUrl = await readDataUrl(file);
+          const uploaded = await apiFetch<{ url?: string; publicId?: string }>("/api/upload", {
+            method: "POST",
+            body: JSON.stringify({ file: dataUrl, folder: "skyal-designs" }),
+          });
+          if (!uploaded?.url) throw new Error("no URL returned");
+          next.push({ url: uploaded.url, publicId: uploaded.publicId, name: file.name, dataUrl });
+        } catch {
+          setAttachmentError(`${file.name}: upload failed. Please try again.`);
+        }
+      }
+      setPendingImages(next);
+    } finally {
+      setUploading(false);
+    }
+  };
 
   return (
     <div className="max-w-[860px] mx-auto px-4 sm:px-6 lg:px-10 py-12 lg:py-20">
@@ -194,9 +270,9 @@ export default function ChatView({
                 {m.who === "support" ? "S" : "You"}
               </div>
               <div className={`max-w-[78%] ${m.who === "customer" ? "text-right" : ""}`}>
-                {m.image && (
-                  <img src={m.image} alt="attachment" className={`mb-1.5 max-w-[200px] border border-hairline ${m.who === "customer" ? "ml-auto" : ""}`} />
-                )}
+                {m.images && m.images.length > 0 && m.images.map((src, i) => (
+                  <img key={`${m.id}-img-${i}`} src={src} alt="attachment" className={`mb-1.5 max-w-[200px] border border-hairline ${m.who === "customer" ? "ml-auto" : ""}`} />
+                ))}
                 <div
                   className={`inline-block px-4 py-2.5 text-sm leading-relaxed text-left ${
                     m.error
@@ -225,7 +301,7 @@ export default function ChatView({
                           const specs: ChatSpecs = buildChatSpecs(
                             (m.quote || {}) as unknown as Record<string, unknown>,
                           );
-                          if (onOrderWithQuote) onOrderWithQuote({ specs, context: lastUserQueryRef.current });
+                          if (onOrderWithQuote) onOrderWithQuote({ specs, context: lastUserQueryRef.current, attachments: lastAttachmentsRef.current });
                           else onNavigate("order");
                         }}
                         className="mt-2 inline-flex items-center gap-1 text-xs bg-laser text-white px-3 py-1.5 hover:bg-ink transition-colors"
@@ -250,7 +326,7 @@ export default function ChatView({
                           quantity: m.custom!.quantity > 0 ? m.custom!.quantity : 1,
                           sla: m.custom!.sla === "Express" ? "Express" : undefined,
                         };
-                        if (onOrderCustom) onOrderCustom({ specs, context: lastUserQueryRef.current });
+                        if (onOrderCustom) onOrderCustom({ specs, context: lastUserQueryRef.current, attachments: lastAttachmentsRef.current });
                         else onNavigate("order");
                       }}
                       className="mt-2 inline-flex items-center gap-1 text-xs bg-laser text-white px-3 py-1.5 hover:bg-ink transition-colors"
@@ -297,17 +373,22 @@ export default function ChatView({
           ))}
         </div>
 
-        {/* Pending image */}
-        {pendingImage && (
-          <div className="px-5 pt-2 flex">
-            <div className="inline-flex items-center gap-2 border border-hairline bg-bone p-1.5 pr-3">
-              <img src={pendingImage} alt="pending" className="w-10 h-10 object-cover" />
-              <span className="text-xs text-thread">attached</span>
-              <button onClick={() => setPendingImage(null)} className="text-thread hover:text-ink">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
+        {/* Pending image attachments */}
+        {pendingImages.length > 0 && (
+          <div className="px-5 pt-2 flex flex-wrap gap-2">
+            {pendingImages.map((img, i) => (
+              <div key={`${img.url}-${i}`} className="inline-flex items-center gap-2 border border-hairline bg-bone p-1.5 pr-3">
+                <img src={img.dataUrl || img.url} alt={img.name} className="w-10 h-10 object-cover" />
+                <span className="max-w-[120px] truncate text-xs text-thread">{img.name}</span>
+                <button onClick={() => setPendingImages((prev) => prev.filter((_, j) => j !== i))} className="text-thread hover:text-ink" aria-label={`Remove ${img.name}`}>
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
           </div>
+        )}
+        {attachmentError && (
+          <div className="px-5 pt-2 text-xs text-[#DC2626]">{attachmentError}</div>
         )}
 
         {/* Input */}
@@ -318,11 +399,11 @@ export default function ChatView({
           }}
           className="flex items-center gap-2 px-5 py-3.5 border-t border-hairline"
         >
-          <input ref={fileRef} type="file" accept="image/*" onChange={onFile} className="hidden" />
+          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={onFiles} className="hidden" />
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            disabled={busy}
+            disabled={busy || uploading}
             className="w-9 h-9 flex items-center justify-center text-thread hover:text-ink transition-colors disabled:opacity-40"
           >
             <Paperclip className="w-4 h-4" />
@@ -335,7 +416,7 @@ export default function ChatView({
           />
           <button
             type="submit"
-            disabled={busy || (!input.trim() && !pendingImage)}
+            disabled={busy || uploading || (!input.trim() && pendingImages.length === 0)}
             className="inline-flex items-center gap-2 bg-ink text-bone text-sm font-medium px-4 py-2.5 hover:bg-laser hover:text-white transition-colors disabled:opacity-30"
           >
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}

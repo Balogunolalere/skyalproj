@@ -5,7 +5,7 @@ import Nav from "@/components/skyal/Nav";
 import Footer from "@/components/skyal/Footer";
 import BedReadout from "@/components/skyal/BedReadout";
 import { type ViewId } from "@/components/skyal/data";
-import type { ChatSpecs } from "@/lib/chat";
+import type { ChatSpecs, ChatAttachment } from "@/lib/chat";
 import HomeView from "@/components/skyal/views/HomeView";
 import OrderView from "@/components/skyal/views/OrderView";
 import TrackView from "@/components/skyal/views/TrackView";
@@ -52,6 +52,7 @@ export interface ChatHandoff {
   specs?: ChatSpecs;
   custom?: boolean;
   context?: string;
+  attachments?: ChatAttachment[];
 }
 
 export default function Home() {

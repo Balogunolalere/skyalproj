@@ -186,6 +186,7 @@ interface ChatHandoff {
   specs?: ChatSpecs;
   custom?: boolean;
   context?: string;
+  attachments?: { url: string; publicId?: string; name: string }[];
 }
 
 export default function OrderView({
@@ -239,6 +240,7 @@ export default function OrderView({
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
   const [uploadFiles, setUploadFiles] = useState<{ name: string; data: string }[]>([]);
+  const [preloadedFiles, setPreloadedFiles] = useState<{ url: string; publicId?: string; name: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [chatPrefillApplied, setChatPrefillApplied] = useState(false);
 
@@ -277,6 +279,17 @@ export default function OrderView({
     if (chatPrefillApplied || !chatHandoff || servicesLoading || services.length === 0) return;
     const specs = chatHandoff.specs;
     const context = chatHandoff.context || null;
+    // Reference images uploaded in the chat travel with the handoff. They are
+    // already on Cloudinary, so the form only has to include their URLs.
+    if (chatHandoff.attachments?.length) {
+      setPreloadedFiles(
+        chatHandoff.attachments.slice(0, MAX_FILES).map((a) => ({
+          url: a.url,
+          publicId: a.publicId,
+          name: a.name,
+        })),
+      );
+    }
 
     if (chatHandoff.custom || !specs?.service_type) {
       // Custom job (from chat with no catalog match, or calculator link)
@@ -771,12 +784,16 @@ export default function OrderView({
       }
       // Step 0: Upload design files to Cloudinary if present (best-effort, non-blocking)
       // Max 5 files, 10MB each, 25MB total (limits hoisted to module scope)
-      const uploadedFiles: { url: string; publicId: string; name: string }[] = [];
+      const uploadedFiles: { url: string; publicId: string; name: string }[] = preloadedFiles.map((f) => ({
+        url: f.url,
+        publicId: f.publicId || '',
+        name: f.name,
+      }));
       const uploadErrors: string[] = [];
 
       // Validate limits before upload
-      if (uploadFiles.length > MAX_FILES) {
-        setSubmitError(`Maximum ${MAX_FILES} files allowed. You selected ${uploadFiles.length}.`);
+      if (preloadedFiles.length + uploadFiles.length > MAX_FILES) {
+        setSubmitError(`Maximum ${MAX_FILES} files allowed. You selected ${preloadedFiles.length + uploadFiles.length}.`);
         setSubmitting(false);
         return;
       }
@@ -1469,6 +1486,12 @@ export default function OrderView({
                   <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-thread">
                     Design files <span className="lowercase">(up to 5, max 10MB each)</span>
                   </label>
+                  {preloadedFiles.length > 0 && (
+                    <div className="mt-2 text-xs text-thread">
+                      {preloadedFiles.length} image{preloadedFiles.length > 1 ? "s" : ""} attached from chat:{" "}
+                      {preloadedFiles.map((f) => f.name).join(", ")}
+                    </div>
+                  )}
                   <label className="mt-2 flex items-center gap-3 border border-dashed border-ink/30 bg-bone p-4 cursor-pointer hover:border-laser transition-colors">
                     <Upload className="w-5 h-5 text-thread" />
                     <span className="text-sm text-ink">
