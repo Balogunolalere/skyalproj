@@ -8,6 +8,7 @@ import { formatNaira, type ViewId } from "../data";
 import { Coord, Heading } from "../primitives";
 import { ArrowLeft, ArrowRight, Check, Upload, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { ServiceImageCarousel } from "@/components/skyal/ServiceImageCarousel";
+import { CustomRequestDialog } from "@/components/skyal/CustomRequestDialog";
 import { toast } from 'sonner';
 import { buildChatOrderNotes } from "@/lib/chat-order";
 import type { ChatSpecs, Availability } from "@/lib/chat";
@@ -260,6 +261,7 @@ export default function OrderView({
   // Custom job mode ("Something else" / chat handoff with no catalog match):
   // describe the job, we price it via rules or confirm pricing quickly.
   const [customMode, setCustomMode] = useState(false);
+  const [customRequestOpen, setCustomRequestOpen] = useState(false);
   /**
    * Products already added to THIS order.
    *
@@ -1377,7 +1379,7 @@ export default function OrderView({
               {/* Something else / custom job — no catalog match needed */}
               {!customMode && !servicesLoading && !servicesError && (
                 <button
-                  onClick={() => { setCustomMode(true); setStep(1); }}
+                  onClick={() => setCustomRequestOpen(true)}
                   className="w-full text-left p-5 border border-dashed border-ink/30 bg-bone hover:border-laser hover:bg-vellum transition-colors"
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -2014,6 +2016,12 @@ export default function OrderView({
           </div>
         </aside>
       </div>
+
+      <CustomRequestDialog
+        open={customRequestOpen}
+        onClose={() => setCustomRequestOpen(false)}
+        brand="SKYAL"
+      />
     </div>
   );
 }
