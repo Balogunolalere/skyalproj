@@ -502,7 +502,7 @@ export default function OrderView({
     (async () => {
       setServicesLoading(true);
       try {
-        const data = await apiFetch<Service[]>(`/api/services?brand=SKYAL`);
+        const data = await apiFetch<Service[]>(`/api/services?brand=SKYAL`, { cache: 'default' });
         if (cancelled) return;
         setServices(Array.isArray(data) ? data : []);
         setServicesError(null);

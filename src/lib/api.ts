@@ -76,7 +76,9 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(options?.headers || {}),
       },
-      cache: 'no-store',
+      // Callers may opt into the browser/CDN cache (the service catalogue
+      // does); everything else stays no-store so order data is never stale.
+      cache: options?.cache ?? 'no-store',
       // Callers may pass their own signal (a longer upload, say).
       signal: options?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });

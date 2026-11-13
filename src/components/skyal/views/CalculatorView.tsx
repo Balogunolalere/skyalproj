@@ -135,7 +135,7 @@ export default function CalculatorView({
     (async () => {
       setServicesLoading(true);
       try {
-        const data = await apiFetch<Service[]>(`/api/services?brand=SKYAL`);
+        const data = await apiFetch<Service[]>(`/api/services?brand=SKYAL`, { cache: 'default' });
         if (cancelled) return;
         const list = Array.isArray(data) ? data : [];
         setServices(list);

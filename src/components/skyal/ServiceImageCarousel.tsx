@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { cloudinaryImage } from '@/lib/images';
 
 /**
  * Swipeable product photos for a service card.
@@ -47,9 +48,14 @@ export function ServiceImageCarousel({ images, alt }: { images?: string[] | null
         aria-label={`View ${alt} photos`}
       >
         <img
-          src={gallery[safeIndex]}
+          src={cloudinaryImage(gallery[safeIndex], 480)}
+          srcSet={`${cloudinaryImage(gallery[safeIndex], 320)} 320w, ${cloudinaryImage(gallery[safeIndex], 640)} 640w`}
+          sizes="(min-width: 1024px) 320px, (min-width: 640px) 45vw, 92vw"
           alt={`${alt} — photo ${safeIndex + 1}`}
           loading="lazy"
+          decoding="async"
+          width={640}
+          height={288}
           className="w-full h-full object-cover"
         />
 
@@ -111,8 +117,9 @@ export function ServiceImageCarousel({ images, alt }: { images?: string[] | null
             <span className="text-xl leading-none" aria-hidden>×</span>
           </button>
           <img
-            src={gallery[safeIndex]}
+            src={cloudinaryImage(gallery[safeIndex], 1600)}
             alt={`${alt} — photo ${safeIndex + 1}`}
+            decoding="async"
             className="max-h-[85vh] max-w-[92vw] object-contain"
             onClick={(e) => e.stopPropagation()}
           />

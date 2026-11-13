@@ -3,6 +3,7 @@
 import { normalizeChoices, type OptionField, type ServiceOptionShape } from "@/lib/order";
 import { derivedValue, isVerbatimTextField, visibleOptionFields } from '@/lib/order';
 import { PRINT_FONTS, fontStack, previewTextFor } from "@/lib/print-fonts";
+import { cloudinaryImage } from "@/lib/images";
 
 /**
  * Renders the service's option inputs exactly like the admin contract:
@@ -218,9 +219,10 @@ function OptionFieldInput({
                   >
                     {choice.image ? (
                       <img
-                        src={choice.image}
+                        src={cloudinaryImage(choice.image, 80)}
                         alt=""
                         loading="lazy"
+                        decoding="async"
                         className="h-10 w-10 shrink-0 object-cover border border-hairline"
                       />
                     ) : (

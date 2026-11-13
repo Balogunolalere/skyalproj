@@ -61,6 +61,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Service photos are served from Cloudinary; open the connection
+            while the HTML is still parsing. */}
+        <link rel="preconnect" href="https://res.cloudinary.com" crossOrigin="" />
+      </head>
       <body
         className={`${fraunces.variable} ${instrumentSans.variable} ${jetbrainsMono.variable} ${pacifico.variable} bg-bone text-ink antialiased`}
       >
